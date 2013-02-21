@@ -20,7 +20,6 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import com.dotmarketing.business.APILocator;
 import com.dotmarketing.business.CacheLocator;
 import com.dotmarketing.business.DotCacheException;
 import com.dotmarketing.db.HibernateUtil;
@@ -259,7 +258,7 @@ public class LanguageFactoryImpl extends LanguageFactory {
 		
 		if(readTimeStamps.get(filePath) != null) {
 			Date lastReadTime = readTimeStamps.get(filePath);
-	        int refreshInterval = Config.getIntProperty("LANGUAGES_REFRESH_INTERVAL", 1);
+	        int refreshInterval = Config.getIntProperty("LANGUAGES_REFRESH_INTERVAL", 5);
 			if(new Date().getTime() - lastReadTime.getTime() > refreshInterval * 1000 * 60) {
 				File from = new java.io.File(filePath);
 				if(from.lastModified() > lastReadTime.getTime())

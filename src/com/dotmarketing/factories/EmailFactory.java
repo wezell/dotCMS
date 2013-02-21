@@ -799,7 +799,7 @@ public class EmailFactory {
 	
 
 	private static String getFormFileFolderPath (String formType, String formInode) {
-		String path = Config.getStringProperty("SAVED_UPLOAD_FILES_PATH")
+		String path = Config.getStringProperty("SAVED_UPLOAD_FILES_PATH", "/uploaded_files")
 		+ "/" + formType.replace(" ", "_") + "/"
 		+ String.valueOf(formInode).substring(0, 1) + "/" + formInode;
 		return path;

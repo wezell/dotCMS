@@ -23,7 +23,9 @@
 </style>
 
 <%
-	boolean enablePreview = null!=Config.getStringProperty(com.dotmarketing.util.WebKeys.PREVIEW_TEMPLATE_DESIGN_ENABLE)?Boolean.parseBoolean(Config.getStringProperty(com.dotmarketing.util.WebKeys.PREVIEW_TEMPLATE_DESIGN_ENABLE)):false;
+	boolean enablePreview = Config.getStringProperty("PREVIEW_TEMPLATE_DESIGN_ENABLE", true);
+
+
 
 	boolean overrideBody = (Boolean)request.getAttribute(com.dotmarketing.util.WebKeys.OVERRIDE_DRAWED_TEMPLATE_BODY);
 

@@ -65,12 +65,6 @@ public class FileUtils {
         return null;
     }
 
-    public static String getVersionFileURI(File file) {
-
-        return Config.getStringProperty("VERSION_FILE_PREFIX") + file.getInode() + "."
-                + UtilMethods.getFileExtension(file.getFileName()).intern();
-
-    }
 
     public static String getRelativeAssetPath(Inode inode) {
         String _inode = inode.getInode();

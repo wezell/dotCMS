@@ -533,7 +533,7 @@ public class CMSFilter implements Filter {
         VELOCITY_PAGE_EXTENSION = Config.getStringProperty("VELOCITY_PAGE_EXTENSION");
         ASSET_PATH = APILocator.getFileAPI().getRelativeAssetsRootPath();
         ASSET_REAL_PATH = Config.getStringProperty("ASSET_REAL_PATH");
-        CMS_ANONYMOUS_ROLE = Config.getStringProperty("CMS_ANONYMOUS_ROLE");
+        CMS_ANONYMOUS_ROLE = Config.getStringProperty("CMS_ANONYMOUS_ROLE", "CMS Anonymous");
 
 
     }

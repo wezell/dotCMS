@@ -367,7 +367,7 @@ public class VelocityUtil {
 
 				String adminRoleKey = "";
 				try {
-					Role adminRole = APILocator.getRoleAPI().loadRoleByKey(Config.getStringProperty("CMS_ADMINISTRATOR_ROLE"));
+					Role adminRole = APILocator.getRoleAPI().loadRoleByKey(Config.getStringProperty("CMS_ADMINISTRATOR_ROLE","CMS Administrator"));
 					adminRoleKey = adminRole.getRoleKey();
 				} catch (Exception e) {
 				}

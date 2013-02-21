@@ -140,7 +140,7 @@ public class UserAPIImpl implements UserAPI {
 			user.setCreateDate(new java.util.Date());
 			user.setCompanyId(PublicCompanyFactory.getDefaultCompanyId());
 			uf.saveUser(user);
-			com.dotmarketing.business.APILocator.getRoleAPI().addRoleToUser(com.dotmarketing.business.APILocator.getRoleAPI().loadRoleByKey(Config.getStringProperty("CMS_ANONYMOUS_ROLE")).getId(), user);
+			com.dotmarketing.business.APILocator.getRoleAPI().addRoleToUser(com.dotmarketing.business.APILocator.getRoleAPI().loadRoleByKey(Config.getStringProperty("CMS_ANONYMOUS_ROLE", "CMS Anonymous")).getId(), user);
 		} catch (NoSuchUserException e) {
 			user = createUser("anonymous", "anonymous@dotcmsfakeemail.org");
 			user.setUserId("anonymous");

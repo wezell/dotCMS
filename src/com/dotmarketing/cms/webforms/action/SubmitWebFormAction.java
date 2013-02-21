@@ -379,7 +379,7 @@ public final class SubmitWebFormAction extends DispatchAction {
 				Logger.error(this,ex.getMessage(),ex);
 			}
 
-			Role defaultRole = com.dotmarketing.business.APILocator.getRoleAPI().loadRoleByKey(Config.getStringProperty("CMS_VIEWER_ROLE"));
+			Role defaultRole = com.dotmarketing.business.APILocator.getRoleAPI().loadRoleByKey(Config.getStringProperty("CMS_VIEWER_ROLE","LoggedIn Site User"));
 			String roleId = defaultRole.getId();
 			if (InodeUtils.isSet(roleId)) {
 				com.dotmarketing.business.APILocator.getRoleAPI().addRoleToUser(roleId, user);

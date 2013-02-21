@@ -88,7 +88,7 @@ public class LoginAction extends DispatchAction {
 	            User u = (User) request.getSession().getAttribute(WebKeys.CMS_USER);
 
 	            List<Role> userRoles = com.dotmarketing.business.APILocator.getRoleAPI().loadRolesForUser(u.getUserId());
-	            Role defaultRole = com.dotmarketing.business.APILocator.getRoleAPI().loadRoleByKey(Config.getStringProperty("CMS_VIEWER_ROLE"));
+	            Role defaultRole = com.dotmarketing.business.APILocator.getRoleAPI().loadRoleByKey(Config.getStringProperty("CMS_VIEWER_ROLE","LoggedIn Site User"));
 	            if (!userRoles.contains(defaultRole)) {
 	            	com.dotmarketing.business.APILocator.getRoleAPI().addRoleToUser(defaultRole.getId(), u);
 	            }
