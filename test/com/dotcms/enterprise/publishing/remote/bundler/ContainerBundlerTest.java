@@ -4,11 +4,14 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
+import org.junit.Assert;
 import org.junit.Test;
 
 import com.dotcms.publisher.pusher.PushPublisherConfig;
+import com.dotcms.publisher.pusher.PushPublisherConfig.Operation;
 import com.dotcms.publisher.pusher.wrapper.ContainerWrapper;
 import com.dotcms.publishing.BundlerStatus;
 import com.dotcms.publishing.BundlerUtil;
@@ -94,6 +97,7 @@ public class ContainerBundlerTest {
         APILocator.getVersionableAPI().setLive(page);
         
         // insert all the contentlets in the page
+        Set<String> childs=new HashSet<String>();
         for(int i=0;i<len;i++) {
             MultiTree mt=new MultiTree();
             mt.setParent1(page.getIdentifier());
@@ -102,13 +106,14 @@ public class ContainerBundlerTest {
             mt.setRelationType("child");
             mt.setTreeOrder(i);
             MultiTreeFactory.saveMultiTree(mt);
+            childs.add(contentlets[i].getIdentifier());
         }
         
         PushPublisherConfig pc=new PushPublisherConfig();
         Set<String> ids=new HashSet<String>();
         ids.add(container.getIdentifier());
         pc.setContainers(ids);
-        
+        pc.setOperation(Operation.PUBLISH);
         File bundleRoot=BundlerUtil.getBundleRoot(UUIDGenerator.generateUuid());
         
         ContainerBundler bundler=new ContainerBundler();
@@ -119,6 +124,21 @@ public class ContainerBundlerTest {
                 +APILocator.getIdentifierAPI().find(container).getURI().replaceAll("/", File.separator));
         ContainerWrapper wrapper = (ContainerWrapper) new XStream(new DomDriver()).fromXML(wrapperFile);
         
+        Assert.assertEquals(1,wrapper.getCsList().size());
+        Assert.assertEquals(wpc.getInode(), wrapper.getCsList().get(0).getStructureId());
+        Assert.assertEquals(container.getInode(), wrapper.getCvi().getLiveInode());
+        Assert.assertEquals(container.getInode(), wrapper.getCvi().getWorkingInode());
+        Assert.assertEquals(10,wrapper.getMultiTree().size());
+        
+        for(Map<String,Object> mt : wrapper.getMultiTree()) {
+            Assert.assertTrue(childs.remove(mt.get("child"))); // make sure all childs are there
+        }
+        
+        Assert.assertEquals(Operation.PUBLISH, wrapper.getOperation());
+        Assert.assertEquals(title, wrapper.getContainer().getTitle());
+        Assert.assertEquals("this is the code", wrapper.getContainer().getCode());
+        Assert.assertEquals("preloop", wrapper.getContainer().getPreLoop());
+        Assert.assertEquals("postloop", wrapper.getContainer().getPostLoop());
     }
 
 }
