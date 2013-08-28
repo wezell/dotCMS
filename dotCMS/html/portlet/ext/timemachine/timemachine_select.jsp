@@ -188,7 +188,7 @@ function showSettings() {
         title: "<%= LanguageUtil.get(pageContext, "TIMEMACHINE-SETTINGS")%>",
         style: "width: 600px;height: 600px;",
         content: new dojox.layout.ContentPane({
-        	style: "height:550px; width: 580px;",
+        	//style: "height:550px; width: 580px;",
             href: "/html/portlet/ext/timemachine/settings.jsp"
         }),
         onHide: function() {
@@ -310,6 +310,20 @@ function futureChange() {
 	                       </td>
                        </tr>
                    </table>
+                   <script language="Javascript">
+						/**
+							focus on search box
+						**/
+						require([ "dijit/focus", "dojo/dom", "dojo/domReady!" ], function(focusUtil, dom){
+							dojo.require('dojox.timing');
+							t = new dojox.timing.Timer(500);
+							t.onTick = function(){
+							  focusUtil.focus(dom.byId("timesel"));
+							  t.stop();
+							}
+							t.start();
+						});
+					</script>
                     <%if(APILocator.getRoleAPI().doesUserHaveRole(user, APILocator.getRoleAPI().loadCMSAdminRole())){ %>
                        <span id="settings" style="float:right">
                            <button id="settingsBtn" dojoType="dijit.form.Button" onClick="showSettings()">

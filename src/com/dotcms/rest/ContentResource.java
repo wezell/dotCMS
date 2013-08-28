@@ -31,7 +31,6 @@ import javax.ws.rs.core.Response.Status;
 
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.IOUtils;
-import org.apache.lucene.queryParser.ParseException;
 import org.codehaus.jettison.json.JSONArray;
 import org.codehaus.jettison.json.JSONException;
 import org.codehaus.jettison.json.JSONObject;
@@ -61,6 +60,7 @@ import com.dotmarketing.util.Logger;
 import com.dotmarketing.util.UtilMethods;
 import com.dotmarketing.viewtools.content.util.ContentUtils;
 import com.liferay.portal.model.User;
+import com.sun.jersey.core.header.ContentDisposition;
 import com.sun.jersey.multipart.BodyPart;
 import com.sun.jersey.multipart.FormDataMultiPart;
 import com.thoughtworks.xstream.XStream;
@@ -87,7 +87,6 @@ public class ContentResource extends WebResource {
      * @param limit how many results return
      * @param offset how many results skip 
      * @return json array of objects. each object with inode and identifier
-     * @throws ParseException
      * @throws DotSecurityException
      * @throws DotDataException
      * @throws JSONException
@@ -95,7 +94,7 @@ public class ContentResource extends WebResource {
     @GET
     @Path("/indexsearch/{query}/sortby/{sortby}/limit/{limit}/offset/{offset}")
     @Produces(MediaType.APPLICATION_JSON)
-    public String indexSearch(@Context HttpServletRequest request, @PathParam("query") String query, @PathParam("sortby") String sortBy, @PathParam("limit") int limit, @PathParam("offset") int offset) throws ParseException, DotSecurityException, DotDataException, JSONException {
+    public String indexSearch(@Context HttpServletRequest request, @PathParam("query") String query, @PathParam("sortby") String sortBy, @PathParam("limit") int limit, @PathParam("offset") int offset) throws DotSecurityException, DotDataException, JSONException {
         InitDataObject initData = init(null, true, request, false);
 
         List<ContentletSearch> searchIndex = APILocator.getContentletAPI().searchIndex(query, limit, offset, sortBy, initData.getUser(), true);
@@ -360,8 +359,12 @@ public class ContentResource extends WebResource {
         User user=init.getUser();
 
         Contentlet contentlet=new Contentlet();
+        
         for(BodyPart part : multipart.getBodyParts()) {
-            if(part.getMediaType().equals(MediaType.APPLICATION_JSON_TYPE)) {
+            ContentDisposition cd=part.getContentDisposition();
+            String name=cd!=null && cd.getParameters().containsKey("name") ? cd.getParameters().get("name") : "";
+            
+            if(part.getMediaType().equals(MediaType.APPLICATION_JSON_TYPE) || name.equals("json")) {
                 try {
                     processJSON(contentlet,part.getEntityAs(InputStream.class));
                 } catch (JSONException e) {
@@ -370,14 +373,14 @@ public class ContentResource extends WebResource {
                     return Response.status(Status.INTERNAL_SERVER_ERROR).build();
                 }
             }
-            else if(part.getMediaType().equals(MediaType.APPLICATION_XML_TYPE)) {
+            else if(part.getMediaType().equals(MediaType.APPLICATION_XML_TYPE) || name.equals("xml")) {
                 try {
                     processXML(contentlet, part.getEntityAs(InputStream.class));
                 } catch (Exception e) {
                     return Response.status(Status.INTERNAL_SERVER_ERROR).build();
                 }
             }
-            else if(part.getMediaType().equals(MediaType.APPLICATION_FORM_URLENCODED_TYPE)) {
+            else if(part.getMediaType().equals(MediaType.APPLICATION_FORM_URLENCODED_TYPE) || name.equals("urlencoded")) {
                 try {
                     processForm(contentlet, part.getEntityAs(InputStream.class));
                 } catch (Exception e) {
@@ -421,13 +424,13 @@ public class ContentResource extends WebResource {
         
         Contentlet contentlet=new Contentlet();
         try {
-            if(request.getContentType().equals(MediaType.APPLICATION_JSON)) {
+            if(request.getContentType().startsWith(MediaType.APPLICATION_JSON)) {
                 processJSON(contentlet, request.getInputStream());
             }
-            else if(request.getContentType().equals(MediaType.APPLICATION_XML)) {
+            else if(request.getContentType().startsWith(MediaType.APPLICATION_XML)) {
                 processXML(contentlet, request.getInputStream());
             }
-            else if(request.getContentType().equals(MediaType.APPLICATION_FORM_URLENCODED)) {
+            else if(request.getContentType().startsWith(MediaType.APPLICATION_FORM_URLENCODED)) {
                 processForm(contentlet, request.getInputStream());
             }
         } catch(JSONException e) {

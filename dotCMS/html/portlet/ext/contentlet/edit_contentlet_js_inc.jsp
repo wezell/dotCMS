@@ -321,9 +321,6 @@ dojo.require("dojox.layout.ContentPane");
 			formData[formDataIndex] = formElements[formElementsIndex].name+nameValueSeparator+formElements[formElementsIndex].value;
 		}
 
-		console.log(formData);
-
-
 		// Categories selected in the Category Dialog
 
 		var catCount = <%=UtilMethods.isSet(catCount)?Integer.parseInt(catCount):0 %>;
@@ -619,7 +616,6 @@ dojo.require("dojox.layout.ContentPane");
 	}
 
 	function saveBinaryFileOnContentCallback(data, fieldRelatedData){
-		alert('sdfsdf');
 
 		if(data["contentletInode"] != null && isInodeSet(data["contentletInode"])){
 
@@ -673,9 +669,11 @@ dojo.require("dojox.layout.ContentPane");
 				            fieldName : "fileAsset",
 				            binaryFieldId : "binary1",
 				            fieldContentletId : "binary1",
-				            saveAsFileName : fieldRelatedData['fileName'],
-// 				            class : "thumbnailDiv"+fieldRelatedData['fieldVarName'],
-							parentNode: thumbnailParentDiv})
+				            saveAsFileName : fieldRelatedData['fileName']
+ 				            //class : "thumbnailDiv"+fieldRelatedData['fieldVarName'],
+                            //parentNode: thumbnailParentDiv
+                });
+                newImageEditor.placeAt(thumbnailParentDiv);
 
 			<%}%>
 		}
@@ -749,7 +747,6 @@ dojo.require("dojox.layout.ContentPane");
 						+ "&expireDate=<%=structure.getExpireDateVar()%>"
 						+ "&structureInode=<%=structure.getInode()%>"
 						+ "&r=" + r;
-						console.log(url);
     			myCp.attr("href", url);
     			return;
     		}
