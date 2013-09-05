@@ -224,7 +224,7 @@
         }
 %>
     <div style="margin-bottom:20px;width:700px;overflow:visible;border:0px red solid">
-    	<div id="aceEditor" class="classAce"></div>
+    	<div id="<%=field.getVelocityVarName()%>aceEditor" class="classAce"></div>
         <textarea  <%= isReadOnly?"readonly=\"readonly\"":"" %>
             class="editWYSIWYGField" rows="7"
             name="<%=field.getFieldContentlet()%>"
@@ -248,7 +248,7 @@
 	                    	class="form-text"
 							onkeyup="lookupGlossaryTerm('<%= field.getVelocityVarName() %>','<%= defaultLang.getId() %>');" />
 
-							<div style="display:none;position:absolute;border:1px solid #ddd;padding:5px 10px;" id="glossary_term_popup_<%= field.getVelocityVarName() %>">
+							<div style="display:none;position:absolute;border:1px solid #ddd;padding:5px 10px;z-index:1" id="glossary_term_popup_<%= field.getVelocityVarName() %>">
 	                    		<div id="glossary_term_table_<%= field.getVelocityVarName() %>"></div>
 		                	</div>
 			                <script type="text/javascript">
