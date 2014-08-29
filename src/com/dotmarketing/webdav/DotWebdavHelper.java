@@ -20,18 +20,19 @@ import java.util.Hashtable;
 import java.util.List;
 import java.util.Map;
 
+import com.dotcms.repackage.io.milton.http.LockInfo;
+import com.dotcms.repackage.io.milton.http.LockResult;
+import com.dotcms.repackage.io.milton.http.LockTimeout;
+import com.dotcms.repackage.io.milton.http.LockToken;
+import com.dotcms.repackage.io.milton.resource.CollectionResource;
+import com.dotcms.repackage.io.milton.resource.Resource;
 import com.dotcms.repackage.org.apache.commons.io.IOUtils;
 import com.dotcms.repackage.org.apache.oro.text.regex.MalformedPatternException;
 import com.dotcms.repackage.org.apache.oro.text.regex.Perl5Compiler;
 import com.dotcms.repackage.org.apache.oro.text.regex.Perl5Matcher;
+
 import org.apache.velocity.runtime.resource.ResourceManager;
 
-import com.dotcms.repackage.com.bradmcevoy.http.CollectionResource;
-import com.dotcms.repackage.com.bradmcevoy.http.LockInfo;
-import com.dotcms.repackage.com.bradmcevoy.http.LockResult;
-import com.dotcms.repackage.com.bradmcevoy.http.LockTimeout;
-import com.dotcms.repackage.com.bradmcevoy.http.LockToken;
-import com.dotcms.repackage.com.bradmcevoy.http.Resource;
 import com.dotmarketing.beans.Host;
 import com.dotmarketing.beans.Identifier;
 import com.dotmarketing.beans.Permission;
@@ -110,7 +111,7 @@ public class DotWebdavHelper {
 	private static MessageDigest md5Helper;
 
 
-	private Hashtable<String, com.dotcms.repackage.com.bradmcevoy.http.LockInfo> resourceLocks = new Hashtable<String, com.dotcms.repackage.com.bradmcevoy.http.LockInfo>();
+	private Hashtable<String, LockInfo> resourceLocks = new Hashtable<String, LockInfo>();
 
 	public DotWebdavHelper() {
 		Perl5Compiler c = new Perl5Compiler();
@@ -878,8 +879,8 @@ public class DotWebdavHelper {
 					fileAsset.setBinary(FileAssetAPI.BINARY_FIELD, fileData);
 					fileAsset.setHost(host.getIdentifier());
 					fileAsset=APILocator.getContentletAPI().checkin(fileAsset, user, false);
-					
-					//Validate if the user have the right permission before 
+
+					//Validate if the user have the right permission before
 					if(isAutoPub && !perAPI.doesUserHavePermission(fileAsset, PermissionAPI.PERMISSION_PUBLISH, user) ){
 						APILocator.getContentletAPI().archive(fileAsset, APILocator.getUserAPI().getSystemUser(), false);
 						APILocator.getContentletAPI().delete(fileAsset, APILocator.getUserAPI().getSystemUser(), false);

@@ -8,19 +8,19 @@ import java.io.OutputStream;
 import java.util.Date;
 import java.util.Map;
 
-import com.dotcms.repackage.com.bradmcevoy.http.Auth;
-import com.dotcms.repackage.com.bradmcevoy.http.CollectionResource;
-import com.dotcms.repackage.com.bradmcevoy.http.FileItem;
-import com.dotcms.repackage.com.bradmcevoy.http.FileResource;
-import com.dotcms.repackage.com.bradmcevoy.http.HttpManager;
-import com.dotcms.repackage.com.bradmcevoy.http.LockInfo;
-import com.dotcms.repackage.com.bradmcevoy.http.LockResult;
-import com.dotcms.repackage.com.bradmcevoy.http.LockTimeout;
-import com.dotcms.repackage.com.bradmcevoy.http.LockToken;
-import com.dotcms.repackage.com.bradmcevoy.http.LockableResource;
-import com.dotcms.repackage.com.bradmcevoy.http.Range;
-import com.dotcms.repackage.com.bradmcevoy.http.Request;
-import com.dotcms.repackage.com.bradmcevoy.http.Resource;
+import com.dotcms.repackage.io.milton.http.Auth;
+import com.dotcms.repackage.io.milton.http.FileItem;
+import com.dotcms.repackage.io.milton.http.HttpManager;
+import com.dotcms.repackage.io.milton.http.LockInfo;
+import com.dotcms.repackage.io.milton.http.LockResult;
+import com.dotcms.repackage.io.milton.http.LockTimeout;
+import com.dotcms.repackage.io.milton.http.LockToken;
+import com.dotcms.repackage.io.milton.http.Range;
+import com.dotcms.repackage.io.milton.http.Request;
+import com.dotcms.repackage.io.milton.resource.CollectionResource;
+import com.dotcms.repackage.io.milton.resource.FileResource;
+import com.dotcms.repackage.io.milton.resource.LockableResource;
+import com.dotcms.repackage.io.milton.resource.Resource;
 import com.dotmarketing.business.APILocator;
 import com.dotmarketing.business.PermissionAPI;
 import com.dotmarketing.util.Config;
@@ -30,17 +30,17 @@ import com.liferay.portal.model.User;
 import com.liferay.util.FileUtil;
 
 /**
- * 
+ *
  * @author Jason Tesser
  */
 public class TempFileResourceImpl implements FileResource, LockableResource {
-    
+
 	private DotWebdavHelper dotDavHelper;
 	private final File file;
     private final String url;
     private boolean isAutoPub = false;
-    private PermissionAPI perAPI; 
-    
+    private PermissionAPI perAPI;
+
     public TempFileResourceImpl(File file, String url, boolean isAutoPub) {
         if( file.isDirectory() ){
         	Logger.error(this, "Trying to get a temp file which is actually a directory!!!");
@@ -53,12 +53,12 @@ public class TempFileResourceImpl implements FileResource, LockableResource {
         this.isAutoPub = isAutoPub;
     }
 
-    
+
     public String getUniqueId() {
         return file.hashCode() + "";
     }
-    
-     
+
+
     public int compareTo(Object o) {
         if( o instanceof Resource ) {
             Resource res = (Resource)o;
@@ -67,8 +67,8 @@ public class TempFileResourceImpl implements FileResource, LockableResource {
             return -1;
         }
     }
-    
-    
+
+
     public void sendContent(OutputStream out, Range range, Map<String, String> params, String arg3) throws IOException {
         FileInputStream fis = new FileInputStream(file);
         BufferedInputStream bin = new BufferedInputStream(fis);
@@ -79,12 +79,12 @@ public class TempFileResourceImpl implements FileResource, LockableResource {
         }
     }
 
-    
+
     public String getName() {
         return file.getName();
     }
 
-    
+
     public Object authenticate(String username, String password) {
     	try {
 			return dotDavHelper.authorizePrincipal(username, password);
@@ -94,7 +94,7 @@ public class TempFileResourceImpl implements FileResource, LockableResource {
 		}
     }
 
-    
+
     public boolean authorise(Request request, Request.Method method, Auth auth) {
     	if(auth == null)
 			return false;
@@ -103,44 +103,44 @@ public class TempFileResourceImpl implements FileResource, LockableResource {
 		}
     }
 
-    
+
     public String getRealm() {
         return null;
     }
 
-    
-    public Date getModifiedDate() {        
+
+    public Date getModifiedDate() {
         Date dt = new Date(file.lastModified());
 //        log.debug("static resource modified: " + dt);
         return dt;
     }
 
-    
+
     public Long getContentLength() {
         return file.length();
     }
 
-    
+
     public String getContentType(String accepts) {
 //        String s = MimeUtil.getMimeType(file.getAbsolutePath());
 //        s = MimeUtil.getPreferedMimeType(accepts,s);
 //        return s;
-    	
+
     	String mimeType = Config.CONTEXT.getMimeType(file.getName());
     	if (!UtilMethods.isSet(mimeType)) {
 			mimeType = com.dotmarketing.portlets.files.model.File.UNKNOWN_MIME_TYPE;
 		}
-    	
+
     	return mimeType;
     }
 
 
-    
+
     public String checkRedirect(Request request) {
         return null;
     }
 
-    
+
     public Long getMaxAgeSeconds() {
         return (long)60;
     }

@@ -1,14 +1,15 @@
 package com.ettrema.httpclient.zsyncclient;
 
-import com.dotcms.repackage.com.bradmcevoy.common.Path;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.BadRequestException;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.ConflictException;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.NotAuthorizedException;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.NotFoundException;
+import com.dotcms.repackage.io.milton.common.Path;
+import com.dotcms.repackage.io.milton.http.exceptions.BadRequestException;
+import com.dotcms.repackage.io.milton.http.exceptions.ConflictException;
+import com.dotcms.repackage.io.milton.http.exceptions.NotAuthorizedException;
+import com.dotcms.repackage.io.milton.http.exceptions.NotFoundException;
 import com.ettrema.httpclient.Host;
 import com.ettrema.httpclient.HttpException;
 import com.ettrema.httpclient.ProgressListener;
 import com.ettrema.httpclient.Utils;
+
 import java.io.File;
 import java.io.IOException;
 
@@ -21,6 +22,6 @@ import java.io.IOException;
  */
 public interface FileSyncer {
     File download(Host host, Path remotePath, File localFile, final ProgressListener listener) throws IOException, NotFoundException, HttpException, Utils.CancelledException, NotAuthorizedException, BadRequestException, ConflictException;
-    
+
     void upload(Host host, File localcopy, Path remotePath, final ProgressListener listener) throws IOException, NotFoundException, Utils.CancelledException, NotAuthorizedException, ConflictException;
 }

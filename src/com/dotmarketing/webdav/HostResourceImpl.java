@@ -6,26 +6,26 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 
-import com.dotcms.repackage.com.bradmcevoy.http.Auth;
-import com.dotcms.repackage.com.bradmcevoy.http.CollectionResource;
-import com.dotcms.repackage.com.bradmcevoy.http.FolderResource;
-import com.dotcms.repackage.com.bradmcevoy.http.HttpManager;
-import com.dotcms.repackage.com.bradmcevoy.http.LockInfo;
-import com.dotcms.repackage.com.bradmcevoy.http.LockResult;
-import com.dotcms.repackage.com.bradmcevoy.http.LockTimeout;
-import com.dotcms.repackage.com.bradmcevoy.http.LockToken;
-import com.dotcms.repackage.com.bradmcevoy.http.LockableResource;
-import com.dotcms.repackage.com.bradmcevoy.http.LockingCollectionResource;
-import com.dotcms.repackage.com.bradmcevoy.http.MakeCollectionableResource;
-import com.dotcms.repackage.com.bradmcevoy.http.PropFindableResource;
-import com.dotcms.repackage.com.bradmcevoy.http.Request;
-import com.dotcms.repackage.com.bradmcevoy.http.Request.Method;
-import com.dotcms.repackage.com.bradmcevoy.http.Resource;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.BadRequestException;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.ConflictException;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.LockedException;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.NotAuthorizedException;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.PreConditionFailedException;
+import com.dotcms.repackage.io.milton.http.Auth;
+import com.dotcms.repackage.io.milton.http.HttpManager;
+import com.dotcms.repackage.io.milton.http.LockInfo;
+import com.dotcms.repackage.io.milton.http.LockResult;
+import com.dotcms.repackage.io.milton.http.LockTimeout;
+import com.dotcms.repackage.io.milton.http.LockToken;
+import com.dotcms.repackage.io.milton.http.Request;
+import com.dotcms.repackage.io.milton.http.Request.Method;
+import com.dotcms.repackage.io.milton.http.exceptions.BadRequestException;
+import com.dotcms.repackage.io.milton.http.exceptions.ConflictException;
+import com.dotcms.repackage.io.milton.http.exceptions.LockedException;
+import com.dotcms.repackage.io.milton.http.exceptions.NotAuthorizedException;
+import com.dotcms.repackage.io.milton.http.exceptions.PreConditionFailedException;
+import com.dotcms.repackage.io.milton.resource.CollectionResource;
+import com.dotcms.repackage.io.milton.resource.FolderResource;
+import com.dotcms.repackage.io.milton.resource.LockableResource;
+import com.dotcms.repackage.io.milton.resource.LockingCollectionResource;
+import com.dotcms.repackage.io.milton.resource.MakeCollectionableResource;
+import com.dotcms.repackage.io.milton.resource.PropFindableResource;
+import com.dotcms.repackage.io.milton.resource.Resource;
 import com.dotmarketing.beans.Host;
 import com.dotmarketing.beans.Identifier;
 import com.dotmarketing.business.APILocator;
@@ -43,12 +43,12 @@ import com.liferay.portal.model.User;
 public class HostResourceImpl extends BasicFolderResourceImpl implements Resource, CollectionResource, FolderResource, PropFindableResource, MakeCollectionableResource, LockingCollectionResource{
 
 	private PermissionAPI perAPI;
-	
+
 	public HostResourceImpl(String path) {
 	    super(path);
 		perAPI = APILocator.getPermissionAPI();
 	}
-	
+
 	public Object authenticate(String username, String password) {
 		try {
 			return dotDavHelper.authorizePrincipal(username, password);
@@ -114,7 +114,7 @@ public class HostResourceImpl extends BasicFolderResourceImpl implements Resourc
 	public Resource child(String childName) {
 	    User user=(User)HttpManager.request().getAuthorization().getTag();
 		String uri="/"+childName;
-		
+
 		try {
 		    Identifier ident=APILocator.getIdentifierAPI().find(host, uri);
 		    if(ident!=null && InodeUtils.isSet(ident.getInode())) {
@@ -134,9 +134,9 @@ public class HostResourceImpl extends BasicFolderResourceImpl implements Resourc
         } catch (Exception e) {
             Logger.error(this, "error loading child '"+childName+"' of host "+host.getHostname(),e);
         }
-	    
+
 		return null;
-	} 
+	}
 
 	public List<? extends Resource> getChildren() {
 	    User user=(User)HttpManager.request().getAuthorization().getTag();
@@ -152,7 +152,7 @@ public class HostResourceImpl extends BasicFolderResourceImpl implements Resourc
 			} catch (Exception e) {
 				Logger.error(this, e.getMessage(), e);
 				throw new DotRuntimeException(e.getMessage(),e);
-			} 
+			}
 			FolderResourceImpl fr = new FolderResourceImpl(folder, p + folderPath);
 			frs.add(fr);
 		}
@@ -165,14 +165,14 @@ public class HostResourceImpl extends BasicFolderResourceImpl implements Resourc
 			    }
 			}
 		} catch (Exception e) {
-			
-		} 
+
+		}
 		/**
 		TemplateFolderResourceImpl tfrl = new TemplateFolderResourceImpl(path + "/_TEMPLATES", host);
 		frs.add(tfrl);
 		**/
-		
-		
+
+
 		String prePath;
 		if(isAutoPub){
 			prePath = "/webdav/autopub/";
@@ -217,12 +217,12 @@ public class HostResourceImpl extends BasicFolderResourceImpl implements Resourc
 		} catch (Exception e) {
 			Logger.error(this, e.getMessage(), e);
 			throw new DotRuntimeException(e.getMessage(),e);
-		} 
+		}
 		for (Folder folderAux : folders) {
 //			if (perAPI.doesUserHavePermission(folderAux, PERMISSION_READ, user, false)) {
-//				
+//
 //			}
-			
+
 		}
 		return folders;
 	}
@@ -260,7 +260,7 @@ public class HostResourceImpl extends BasicFolderResourceImpl implements Resourc
             }
         } catch (Exception e) {
             Logger.warn(this, "can't createAndLock resource "+name+" on host "+this.getName(),e);
-        } 
+        }
 		return null;
 	}
 
@@ -285,12 +285,12 @@ public class HostResourceImpl extends BasicFolderResourceImpl implements Resourc
     public void unlock(String arg0) throws NotAuthorizedException,
             PreConditionFailedException {
         // TODO Auto-generated method stub
-        
+
     }
-    
+
     @Override
     public void delete() throws DotRuntimeException {
-        
+
     }
 
     @Override

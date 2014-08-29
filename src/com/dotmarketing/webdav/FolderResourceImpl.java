@@ -1,35 +1,30 @@
 /**
- * 
+ *
  */
 package com.dotmarketing.webdav;
 
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.util.Date;
 import java.util.List;
-import java.util.Map;
 
-import com.dotcms.repackage.com.bradmcevoy.http.Auth;
-import com.dotcms.repackage.com.bradmcevoy.http.CollectionResource;
-import com.dotcms.repackage.com.bradmcevoy.http.FolderResource;
-import com.dotcms.repackage.com.bradmcevoy.http.HttpManager;
-import com.dotcms.repackage.com.bradmcevoy.http.LockInfo;
-import com.dotcms.repackage.com.bradmcevoy.http.LockResult;
-import com.dotcms.repackage.com.bradmcevoy.http.LockTimeout;
-import com.dotcms.repackage.com.bradmcevoy.http.LockToken;
-import com.dotcms.repackage.com.bradmcevoy.http.LockableResource;
-import com.dotcms.repackage.com.bradmcevoy.http.LockingCollectionResource;
-import com.dotcms.repackage.com.bradmcevoy.http.MakeCollectionableResource;
-import com.dotcms.repackage.com.bradmcevoy.http.Range;
-import com.dotcms.repackage.com.bradmcevoy.http.Request;
-import com.dotcms.repackage.com.bradmcevoy.http.Request.Method;
-import com.dotcms.repackage.com.bradmcevoy.http.Resource;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.BadRequestException;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.ConflictException;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.NotAuthorizedException;
+import com.dotcms.repackage.io.milton.http.Auth;
+import com.dotcms.repackage.io.milton.http.HttpManager;
+import com.dotcms.repackage.io.milton.http.LockInfo;
+import com.dotcms.repackage.io.milton.http.LockResult;
+import com.dotcms.repackage.io.milton.http.LockTimeout;
+import com.dotcms.repackage.io.milton.http.LockToken;
+import com.dotcms.repackage.io.milton.http.Request;
+import com.dotcms.repackage.io.milton.http.Request.Method;
+import com.dotcms.repackage.io.milton.http.exceptions.BadRequestException;
+import com.dotcms.repackage.io.milton.http.exceptions.ConflictException;
+import com.dotcms.repackage.io.milton.http.exceptions.NotAuthorizedException;
+import com.dotcms.repackage.io.milton.resource.CollectionResource;
+import com.dotcms.repackage.io.milton.resource.FolderResource;
+import com.dotcms.repackage.io.milton.resource.LockableResource;
+import com.dotcms.repackage.io.milton.resource.LockingCollectionResource;
+import com.dotcms.repackage.io.milton.resource.MakeCollectionableResource;
+import com.dotcms.repackage.io.milton.resource.Resource;
 import com.dotmarketing.beans.Host;
 import com.dotmarketing.business.APILocator;
 import com.dotmarketing.business.PermissionAPI;
@@ -37,7 +32,6 @@ import com.dotmarketing.exception.DotDataException;
 import com.dotmarketing.exception.DotRuntimeException;
 import com.dotmarketing.exception.DotSecurityException;
 import com.dotmarketing.portlets.contentlet.business.HostAPI;
-import com.dotmarketing.portlets.fileassets.business.IFileAsset;
 import com.dotmarketing.portlets.folders.model.Folder;
 import com.dotmarketing.util.CompanyUtils;
 import com.dotmarketing.util.Logger;
@@ -54,14 +48,14 @@ public class FolderResourceImpl extends BasicFolderResourceImpl implements Locka
 	private Folder folder;
 	private PermissionAPI perAPI;
 	private HostAPI hostAPI;
-	
+
 	public FolderResourceImpl(Folder folder, String path) {
 	    super(path);
 		this.perAPI = APILocator.getPermissionAPI();
 		this.folder = folder;
 		this.hostAPI = APILocator.getHostAPI();
 	}
-	
+
 	/* (non-Javadoc)
 	 * @see com.dotcms.repackage.com.bradmcevoy.http.MakeCollectionableResource#createCollection(java.lang.String)
 	 */
@@ -79,8 +73,8 @@ public class FolderResourceImpl extends BasicFolderResourceImpl implements Locka
 			} catch (DotSecurityException e) {
 				Logger.error(DotWebdavHelper.class, e.getMessage(), e);
 				throw new DotRuntimeException(e.getMessage(), e);
-			}			
-			
+			}
+
 			dotDavHelper.createTempFolder(File.separator + host.getHostname() + folderPath + File.separator + newName);
 			File f = new File(File.separator + host.getHostname() + folderPath);
 			TempFolderResourceImpl tr = new TempFolderResourceImpl(f.getPath(),f ,isAutoPub);
@@ -169,7 +163,7 @@ public class FolderResourceImpl extends BasicFolderResourceImpl implements Locka
 	 */
 	public boolean authorise(Request req, Method method, Auth auth) {
 		try {
-			
+
 			if(auth == null)
 				return false;
 			else {
@@ -250,11 +244,11 @@ public class FolderResourceImpl extends BasicFolderResourceImpl implements Locka
 	public Long getMaxAgeSeconds() {
 		return new Long(0);
 	}
-	
+
 	@Override
     public void copyTo(CollectionResource collRes, String name) throws NotAuthorizedException, BadRequestException,ConflictException {
         User user=(User)HttpManager.request().getAuthorization().getTag();
-        
+
         if(collRes instanceof TempFolderResourceImpl){
             TempFolderResourceImpl tr = (TempFolderResourceImpl)collRes;
             try {

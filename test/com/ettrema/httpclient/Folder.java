@@ -1,13 +1,5 @@
 package com.ettrema.httpclient;
 
-import com.dotcms.repackage.com.bradmcevoy.common.Path;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.BadRequestException;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.ConflictException;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.NotAuthorizedException;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.NotFoundException;
-import com.ettrema.cache.Cache;
-import com.dotcms.repackage.com.ettrema.common.LogUtils;
-import com.ettrema.httpclient.PropFindMethod.Response;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -16,8 +8,17 @@ import java.net.URLConnection;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+
+import com.dotcms.repackage.io.milton.common.LogUtils;
+import com.dotcms.repackage.io.milton.common.Path;
+import com.dotcms.repackage.io.milton.http.exceptions.BadRequestException;
+import com.dotcms.repackage.io.milton.http.exceptions.ConflictException;
+import com.dotcms.repackage.io.milton.http.exceptions.NotAuthorizedException;
+import com.dotcms.repackage.io.milton.http.exceptions.NotFoundException;
 import com.dotcms.repackage.org.slf4j.Logger;
 import com.dotcms.repackage.org.slf4j.LoggerFactory;
+import com.ettrema.cache.Cache;
+import com.ettrema.httpclient.PropFindMethod.Response;
 
 /**
  *
@@ -224,7 +225,7 @@ public class Folder extends Resource {
 
     public com.ettrema.httpclient.File upload(String name, InputStream content, Long contentLength, ProgressListener listener) throws IOException, HttpException, NotAuthorizedException, ConflictException, BadRequestException, NotFoundException {
         children(); // ensure children are loaded
-        String newUri = encodedUrl() + com.dotcms.repackage.com.bradmcevoy.http.Utils.percentEncode(name);
+        String newUri = encodedUrl() + com.dotcms.repackage.io.milton.common.Utils.percentEncode(name);
         String contentType = URLConnection.guessContentTypeFromName(name);
         log.trace("upload: " + newUri);
         int result = host().doPut(newUri, content, contentLength, contentType, listener);
@@ -238,7 +239,7 @@ public class Folder extends Resource {
 
     public Folder createFolder(String name) throws IOException, HttpException , NotAuthorizedException, ConflictException, BadRequestException, NotFoundException {
         children(); // ensure children are loaded
-        String newUri = encodedUrl() + com.dotcms.repackage.com.bradmcevoy.http.Utils.percentEncode(name);
+        String newUri = encodedUrl() + com.dotcms.repackage.io.milton.common.Utils.percentEncode(name);
         try {
             host().doMkCol(newUri);
             flush();
@@ -295,7 +296,7 @@ public class Folder extends Resource {
             l.onChildRemoved(this, child);
         }
         // the list of children in the cache for this folder is no longer valid, so flush it
-        cache.remove(this); 
+        cache.remove(this);
     }
 
     @Override

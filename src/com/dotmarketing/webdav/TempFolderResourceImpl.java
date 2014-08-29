@@ -1,5 +1,5 @@
 /**
- * 
+ *
  */
 package com.dotmarketing.webdav;
 
@@ -13,21 +13,21 @@ import java.util.Date;
 import java.util.List;
 import java.util.Map;
 
-import com.dotcms.repackage.com.bradmcevoy.http.Auth;
-import com.dotcms.repackage.com.bradmcevoy.http.CollectionResource;
-import com.dotcms.repackage.com.bradmcevoy.http.FolderResource;
-import com.dotcms.repackage.com.bradmcevoy.http.HttpManager;
-import com.dotcms.repackage.com.bradmcevoy.http.LockInfo;
-import com.dotcms.repackage.com.bradmcevoy.http.LockResult;
-import com.dotcms.repackage.com.bradmcevoy.http.LockTimeout;
-import com.dotcms.repackage.com.bradmcevoy.http.LockToken;
-import com.dotcms.repackage.com.bradmcevoy.http.LockableResource;
-import com.dotcms.repackage.com.bradmcevoy.http.LockingCollectionResource;
-import com.dotcms.repackage.com.bradmcevoy.http.Range;
-import com.dotcms.repackage.com.bradmcevoy.http.Request;
-import com.dotcms.repackage.com.bradmcevoy.http.Resource;
-import com.dotcms.repackage.com.bradmcevoy.http.Request.Method;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.NotAuthorizedException;
+import com.dotcms.repackage.io.milton.http.Auth;
+import com.dotcms.repackage.io.milton.http.HttpManager;
+import com.dotcms.repackage.io.milton.http.LockInfo;
+import com.dotcms.repackage.io.milton.http.LockResult;
+import com.dotcms.repackage.io.milton.http.LockTimeout;
+import com.dotcms.repackage.io.milton.http.LockToken;
+import com.dotcms.repackage.io.milton.http.Range;
+import com.dotcms.repackage.io.milton.http.Request;
+import com.dotcms.repackage.io.milton.http.Request.Method;
+import com.dotcms.repackage.io.milton.http.exceptions.NotAuthorizedException;
+import com.dotcms.repackage.io.milton.resource.CollectionResource;
+import com.dotcms.repackage.io.milton.resource.FolderResource;
+import com.dotcms.repackage.io.milton.resource.LockableResource;
+import com.dotcms.repackage.io.milton.resource.LockingCollectionResource;
+import com.dotcms.repackage.io.milton.resource.Resource;
 import com.dotmarketing.util.Logger;
 import com.liferay.portal.model.User;
 import com.liferay.util.FileUtil;
@@ -42,15 +42,15 @@ public class TempFolderResourceImpl implements FolderResource, LockableResource,
 	private File folder;
 	private String path;
 	private boolean isAutoPub = false;
-	
-	
+
+
 	public TempFolderResourceImpl(String path, File folder, boolean isAutoPub) {
 		dotDavHelper = new DotWebdavHelper();
 		this.isAutoPub = isAutoPub;
 		this.path = path;
 		this.folder = folder;
 	}
-	
+
 	/* (non-Javadoc)
 	 * @see com.dotcms.repackage.com.bradmcevoy.http.MakeCollectionableResource#createCollection(java.lang.String)
 	 */

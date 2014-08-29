@@ -1,7 +1,8 @@
 package com.ettrema.cache;
 
-import com.dotcms.repackage.com.ettrema.common.Service;
 import java.util.Map;
+
+import com.dotcms.repackage.io.milton.common.Service;
 
 /**
  *

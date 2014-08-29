@@ -1,5 +1,5 @@
 /**
- * 
+ *
  */
 package com.dotmarketing.webdav;
 
@@ -13,22 +13,21 @@ import java.util.Date;
 import java.util.List;
 import java.util.Map;
 
-import com.dotcms.repackage.com.bradmcevoy.http.Auth;
-import com.dotcms.repackage.com.bradmcevoy.http.CollectionResource;
-import com.dotcms.repackage.com.bradmcevoy.http.FolderResource;
-import com.dotcms.repackage.com.bradmcevoy.http.LockInfo;
-import com.dotcms.repackage.com.bradmcevoy.http.LockResult;
-import com.dotcms.repackage.com.bradmcevoy.http.LockTimeout;
-import com.dotcms.repackage.com.bradmcevoy.http.LockToken;
-import com.dotcms.repackage.com.bradmcevoy.http.LockingCollectionResource;
-import com.dotcms.repackage.com.bradmcevoy.http.Range;
-import com.dotcms.repackage.com.bradmcevoy.http.Request;
-import com.dotcms.repackage.com.bradmcevoy.http.Resource;
-import com.dotcms.repackage.com.bradmcevoy.http.Request.Method;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.NotAuthorizedException;
+import com.dotcms.repackage.io.milton.http.Auth;
+import com.dotcms.repackage.io.milton.http.LockInfo;
+import com.dotcms.repackage.io.milton.http.LockResult;
+import com.dotcms.repackage.io.milton.http.LockTimeout;
+import com.dotcms.repackage.io.milton.http.LockToken;
+import com.dotcms.repackage.io.milton.http.Range;
+import com.dotcms.repackage.io.milton.http.Request;
+import com.dotcms.repackage.io.milton.http.Request.Method;
+import com.dotcms.repackage.io.milton.http.exceptions.NotAuthorizedException;
+import com.dotcms.repackage.io.milton.resource.CollectionResource;
+import com.dotcms.repackage.io.milton.resource.FolderResource;
+import com.dotcms.repackage.io.milton.resource.LockingCollectionResource;
+import com.dotcms.repackage.io.milton.resource.Resource;
 import com.dotmarketing.business.Role;
 import com.dotmarketing.business.web.WebAPILocator;
-import com.dotmarketing.util.Config;
 import com.dotmarketing.util.Logger;
 import com.dotmarketing.util.UtilMethods;
 import com.liferay.portal.model.User;
@@ -73,7 +72,7 @@ public class LanguageFolderResourceImpl implements FolderResource, LockingCollec
 				try {
 					path = path.replaceFirst(File.separator, "");
 				} catch (Exception e) {
-					//This code above throw an exception on Windows 
+					//This code above throw an exception on Windows
 					path = path.substring(File.separator.length());
 				}
 			}
@@ -161,7 +160,7 @@ public class LanguageFolderResourceImpl implements FolderResource, LockingCollec
 	public Object authenticate(String username, String password) {
 		try {
 			User user =  dotDavHelper.authorizePrincipal(username, password);
-			//Get the Administrator Role to validate if the user has permission  
+			//Get the Administrator Role to validate if the user has permission
 			Role cmsAdminRole = com.dotmarketing.business.APILocator.getRoleAPI().loadCMSAdminRole();
 			if(com.dotmarketing.business.APILocator.getRoleAPI().doesUserHaveRole(user, cmsAdminRole.getId())){
 				return user;

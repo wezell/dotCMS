@@ -7,23 +7,23 @@ import java.util.Date;
 import java.util.List;
 import java.util.Map;
 
-import com.dotcms.repackage.com.bradmcevoy.http.Auth;
-import com.dotcms.repackage.com.bradmcevoy.http.CollectionResource;
-import com.dotcms.repackage.com.bradmcevoy.http.GetableResource;
-import com.dotcms.repackage.com.bradmcevoy.http.HttpManager;
-import com.dotcms.repackage.com.bradmcevoy.http.LockInfo;
-import com.dotcms.repackage.com.bradmcevoy.http.LockResult;
-import com.dotcms.repackage.com.bradmcevoy.http.LockTimeout;
-import com.dotcms.repackage.com.bradmcevoy.http.LockToken;
-import com.dotcms.repackage.com.bradmcevoy.http.LockableResource;
-import com.dotcms.repackage.com.bradmcevoy.http.PropFindableResource;
-import com.dotcms.repackage.com.bradmcevoy.http.Range;
-import com.dotcms.repackage.com.bradmcevoy.http.Request;
-import com.dotcms.repackage.com.bradmcevoy.http.Request.Method;
-import com.dotcms.repackage.com.bradmcevoy.http.Resource;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.BadRequestException;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.NotAuthorizedException;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.NotFoundException;
+import com.dotcms.repackage.io.milton.http.Auth;
+import com.dotcms.repackage.io.milton.http.HttpManager;
+import com.dotcms.repackage.io.milton.http.LockInfo;
+import com.dotcms.repackage.io.milton.http.LockResult;
+import com.dotcms.repackage.io.milton.http.LockTimeout;
+import com.dotcms.repackage.io.milton.http.LockToken;
+import com.dotcms.repackage.io.milton.http.Range;
+import com.dotcms.repackage.io.milton.http.Request;
+import com.dotcms.repackage.io.milton.http.Request.Method;
+import com.dotcms.repackage.io.milton.http.exceptions.BadRequestException;
+import com.dotcms.repackage.io.milton.http.exceptions.NotAuthorizedException;
+import com.dotcms.repackage.io.milton.http.exceptions.NotFoundException;
+import com.dotcms.repackage.io.milton.resource.CollectionResource;
+import com.dotcms.repackage.io.milton.resource.GetableResource;
+import com.dotcms.repackage.io.milton.resource.LockableResource;
+import com.dotcms.repackage.io.milton.resource.PropFindableResource;
+import com.dotcms.repackage.io.milton.resource.Resource;
 import com.dotmarketing.beans.Host;
 import com.dotmarketing.business.APILocator;
 import com.dotmarketing.business.Role;
@@ -38,12 +38,12 @@ public class WebdavRootResourceImpl implements Resource, PropFindableResource, C
 
 	private DotWebdavHelper dotDavHelper;
 	private String path;
-	
+
 	public WebdavRootResourceImpl(String path) {
 		dotDavHelper = new DotWebdavHelper();
 		this.path=path;
 	}
-	
+
 	public Object authenticate(String username, String password) {
 		try {
 			return dotDavHelper.authorizePrincipal(username, password);
@@ -126,7 +126,7 @@ public class WebdavRootResourceImpl implements Resource, PropFindableResource, C
 			hr.setHost(host);
 			hrs.add(hr);
 		}
-		try {		
+		try {
 			Role adminRole = com.dotmarketing.business.APILocator.getRoleAPI().loadCMSAdminRole();
 			if(com.dotmarketing.business.APILocator.getRoleAPI().doesUserHaveRole(user,adminRole)){
 				hrs.add(new SystemRootResourceImpl());
@@ -180,21 +180,19 @@ public class WebdavRootResourceImpl implements Resource, PropFindableResource, C
 
 	public void unlock(String arg0) throws NotAuthorizedException {
 		// TODO Auto-generated method stub
-		
+
 	}
 
-	@Override
 	public Long getMaxAgeSeconds(Auth arg0) {
 		// TODO Auto-generated method stub
 		return null;
 	}
 
-	@Override
 	public void sendContent(OutputStream arg0, Range arg1,
 			Map<String, String> arg2, String arg3) throws IOException,
 			NotAuthorizedException, BadRequestException, NotFoundException {
 		// TODO Auto-generated method stub
-		
+
 	}
 
 }

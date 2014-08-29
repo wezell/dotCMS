@@ -1,8 +1,5 @@
 package com.dotmarketing.webdav;
 
-import java.io.BufferedInputStream;
-import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -12,35 +9,32 @@ import java.net.URLEncoder;
 import java.util.Date;
 import java.util.Map;
 
-import com.dotcms.repackage.com.bradmcevoy.http.Auth;
-import com.dotcms.repackage.com.bradmcevoy.http.CollectionResource;
-import com.dotcms.repackage.com.bradmcevoy.http.FileItem;
-import com.dotcms.repackage.com.bradmcevoy.http.FileResource;
-import com.dotcms.repackage.com.bradmcevoy.http.HttpManager;
-import com.dotcms.repackage.com.bradmcevoy.http.LockInfo;
-import com.dotcms.repackage.com.bradmcevoy.http.LockResult;
-import com.dotcms.repackage.com.bradmcevoy.http.LockTimeout;
-import com.dotcms.repackage.com.bradmcevoy.http.LockToken;
-import com.dotcms.repackage.com.bradmcevoy.http.LockableResource;
-import com.dotcms.repackage.com.bradmcevoy.http.Range;
-import com.dotcms.repackage.com.bradmcevoy.http.Request;
-import com.dotcms.repackage.com.bradmcevoy.http.Resource;
+import com.dotcms.repackage.io.milton.http.Auth;
+import com.dotcms.repackage.io.milton.http.FileItem;
+import com.dotcms.repackage.io.milton.http.HttpManager;
+import com.dotcms.repackage.io.milton.http.LockInfo;
+import com.dotcms.repackage.io.milton.http.LockResult;
+import com.dotcms.repackage.io.milton.http.LockTimeout;
+import com.dotcms.repackage.io.milton.http.LockToken;
+import com.dotcms.repackage.io.milton.http.Range;
+import com.dotcms.repackage.io.milton.http.Request;
+import com.dotcms.repackage.io.milton.resource.CollectionResource;
+import com.dotcms.repackage.io.milton.resource.FileResource;
+import com.dotcms.repackage.io.milton.resource.LockableResource;
+import com.dotcms.repackage.io.milton.resource.Resource;
 import com.dotmarketing.beans.Host;
 import com.dotmarketing.business.APILocator;
 import com.dotmarketing.business.PermissionAPI;
-import com.dotmarketing.business.web.WebAPILocator;
 import com.dotmarketing.exception.DotDataException;
 import com.dotmarketing.exception.DotRuntimeException;
 import com.dotmarketing.exception.DotSecurityException;
 import com.dotmarketing.portlets.templates.business.TemplateAPI;
 import com.dotmarketing.portlets.templates.model.Template;
-import com.dotmarketing.util.Config;
 import com.dotmarketing.util.Logger;
-import com.dotmarketing.util.UtilMethods;
 import com.liferay.portal.model.User;
 
 /**
- * 
+ *
  * @author Jason Tesser
  */
 public class TemplateFileResourceImpl implements FileResource, LockableResource {
@@ -81,7 +75,7 @@ public class TemplateFileResourceImpl implements FileResource, LockableResource 
 		} catch (UnsupportedEncodingException e) {
 			Logger.error(this, e.getMessage(), e);
 		}
-		x = x + " | " + template.getIdentifier(); 
+		x = x + " | " + template.getIdentifier();
 		return x;
 	}
 
@@ -98,11 +92,11 @@ public class TemplateFileResourceImpl implements FileResource, LockableResource 
 		try {
 			if (auth == null)
 				return false;
-			else { 
+			else {
 			    User user=(User)auth.getTag();
-			    if (method.isWrite) 
+			    if (method.isWrite)
     				return APILocator.getPermissionAPI().doesUserHavePermission(host, PermissionAPI.PERMISSION_CAN_ADD_CHILDREN, user, false);
-    			else if (!method.isWrite) 
+    			else if (!method.isWrite)
     				return APILocator.getPermissionAPI().doesUserHavePermission(host, PermissionAPI.PERMISSION_READ, user,false);
 			}
 		} catch (Exception e) {
@@ -133,7 +127,7 @@ public class TemplateFileResourceImpl implements FileResource, LockableResource 
 
 	/*
 	 * (non-Javadoc)
-	 * 
+	 *
 	 * @see com.dotcms.repackage.com.bradmcevoy.http.PutableResource#createNew(java.lang.String,
 	 * java.io.InputStream, java.lang.Long, java.lang.String)
 	 */

@@ -8,18 +8,18 @@ import java.io.OutputStream;
 import java.util.Date;
 import java.util.Map;
 
-import com.dotcms.repackage.com.bradmcevoy.http.Auth;
-import com.dotcms.repackage.com.bradmcevoy.http.CollectionResource;
-import com.dotcms.repackage.com.bradmcevoy.http.FileItem;
-import com.dotcms.repackage.com.bradmcevoy.http.FileResource;
-import com.dotcms.repackage.com.bradmcevoy.http.LockInfo;
-import com.dotcms.repackage.com.bradmcevoy.http.LockResult;
-import com.dotcms.repackage.com.bradmcevoy.http.LockTimeout;
-import com.dotcms.repackage.com.bradmcevoy.http.LockToken;
-import com.dotcms.repackage.com.bradmcevoy.http.LockableResource;
-import com.dotcms.repackage.com.bradmcevoy.http.Range;
-import com.dotcms.repackage.com.bradmcevoy.http.Request;
-import com.dotcms.repackage.com.bradmcevoy.http.Resource;
+import com.dotcms.repackage.io.milton.http.Auth;
+import com.dotcms.repackage.io.milton.http.FileItem;
+import com.dotcms.repackage.io.milton.http.LockInfo;
+import com.dotcms.repackage.io.milton.http.LockResult;
+import com.dotcms.repackage.io.milton.http.LockTimeout;
+import com.dotcms.repackage.io.milton.http.LockToken;
+import com.dotcms.repackage.io.milton.http.Range;
+import com.dotcms.repackage.io.milton.http.Request;
+import com.dotcms.repackage.io.milton.resource.CollectionResource;
+import com.dotcms.repackage.io.milton.resource.FileResource;
+import com.dotcms.repackage.io.milton.resource.LockableResource;
+import com.dotcms.repackage.io.milton.resource.Resource;
 import com.dotmarketing.business.Role;
 import com.dotmarketing.business.web.WebAPILocator;
 import com.dotmarketing.util.Config;
@@ -29,7 +29,7 @@ import com.liferay.portal.model.User;
 import com.liferay.util.FileUtil;
 
 /**
- * 
+ *
  * @author Jason Tesser
  */
 public class LanguageFileResourceImpl implements FileResource, LockableResource {
@@ -55,7 +55,7 @@ public class LanguageFileResourceImpl implements FileResource, LockableResource 
 			}
 			catch(Exception ex)
 			{
-				//This code above throw an exception on Widnwso 
+				//This code above throw an exception on Widnwso
 				path = path.substring(File.separator.length());
 			}
 		}
@@ -87,7 +87,7 @@ public class LanguageFileResourceImpl implements FileResource, LockableResource 
 		int n = 0;
 		while( -1 != (n = bin.read( buffer )) ) {
 			out.write( buffer, 0, n );
-		}		
+		}
 	}
 
 
@@ -99,7 +99,7 @@ public class LanguageFileResourceImpl implements FileResource, LockableResource 
 	public Object authenticate(String username, String password) {
 		try {
 			User user =  dotDavHelper.authorizePrincipal(username, password);
-			  
+
 			//Get the Administrator Role to validate if the user has permission
 			Role cmsAdminRole = com.dotmarketing.business.APILocator.getRoleAPI().loadCMSAdminRole();
 			if(com.dotmarketing.business.APILocator.getRoleAPI().doesUserHaveRole(user,cmsAdminRole.getId())){
@@ -128,7 +128,7 @@ public class LanguageFileResourceImpl implements FileResource, LockableResource 
 	}
 
 
-	public Date getModifiedDate() {        
+	public Date getModifiedDate() {
 		Date dt = new Date(file.lastModified());
 //		log.debug("static resource modified: " + dt);
 		return dt;
@@ -144,12 +144,12 @@ public class LanguageFileResourceImpl implements FileResource, LockableResource 
 //		String s = MimeUtil.getMimeType(file.getAbsolutePath());
 //		s = MimeUtil.getPreferedMimeType(accepts,s);
 //		return s;
-		
+
 		String mimeType = Config.CONTEXT.getMimeType(file.getName());
 		if (!UtilMethods.isSet(mimeType)) {
 			mimeType = com.dotmarketing.portlets.files.model.File.UNKNOWN_MIME_TYPE;
 		}
-		
+
 		return mimeType;
 	}
 

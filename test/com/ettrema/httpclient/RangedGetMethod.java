@@ -1,7 +1,8 @@
 package com.ettrema.httpclient;
 
-import com.dotcms.repackage.com.bradmcevoy.http.Range;
 import java.util.List;
+
+import com.dotcms.repackage.io.milton.http.Range;
 import com.dotcms.repackage.org.apache.commons.httpclient.HttpMethodBase;
 import com.dotcms.repackage.org.slf4j.Logger;
 import com.dotcms.repackage.org.slf4j.LoggerFactory;
@@ -28,7 +29,7 @@ import com.dotcms.repackage.org.slf4j.LoggerFactory;
  * @author Sean C. Sullivan
  * @author <a href="mailto:mbowler@GargoyleSoftware.com">Mike Bowler</a>
  * @author <a href="mailto:jsdever@apache.org">Jeff Dever</a>
- * 
+ *
  * @version $Revision: 480424 $
  * @since 1.0
  */
@@ -39,7 +40,7 @@ public class RangedGetMethod extends HttpMethodBase {
     private static final Logger log = LoggerFactory.getLogger(RangedGetMethod.class);
 
     public RangedGetMethod(String uri, List<Range> dataRanges) {
-        super(uri);    
+        super(uri);
         if (dataRanges != null && !dataRanges.isEmpty()) {
             String rangeHeaderVal = getRangesRequest(dataRanges);
 			log.info("ranges: " + rangeHeaderVal);
@@ -68,11 +69,11 @@ public class RangedGetMethod extends HttpMethodBase {
      * Note that all of the instance variables will be reset
      * once this method has been called. This method will also
      * release the connection being used by this HTTP method.
-     * 
+     *
      * @see #releaseConnection()
-     * 
+     *
      * @since 1.0
-     * 
+     *
      * @deprecated no longer supported and will be removed in the future
      *             version of HttpClient
      */

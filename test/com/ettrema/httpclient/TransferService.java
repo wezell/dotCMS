@@ -1,14 +1,15 @@
 package com.ettrema.httpclient;
 
-import com.dotcms.repackage.com.bradmcevoy.http.Range;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.BadRequestException;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.ConflictException;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.NotAuthorizedException;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.NotFoundException;
-import com.dotcms.repackage.com.ettrema.common.LogUtils;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.List;
+
+import com.dotcms.repackage.io.milton.common.LogUtils;
+import com.dotcms.repackage.io.milton.http.Range;
+import com.dotcms.repackage.io.milton.http.exceptions.BadRequestException;
+import com.dotcms.repackage.io.milton.http.exceptions.ConflictException;
+import com.dotcms.repackage.io.milton.http.exceptions.NotAuthorizedException;
+import com.dotcms.repackage.io.milton.http.exceptions.NotFoundException;
 import com.dotcms.repackage.org.apache.commons.httpclient.HttpClient;
 import com.dotcms.repackage.org.apache.commons.httpclient.HttpMethodBase;
 import com.dotcms.repackage.org.apache.commons.httpclient.methods.GetMethod;

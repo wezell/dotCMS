@@ -1,13 +1,13 @@
 /**
- * 
+ *
  */
 package com.dotmarketing.webdav;
 
-import com.dotcms.repackage.com.bradmcevoy.http.ApplicationConfig;
-import com.dotcms.repackage.com.bradmcevoy.http.HttpManager;
-import com.dotcms.repackage.com.bradmcevoy.http.Initable;
-import com.dotcms.repackage.com.bradmcevoy.http.Resource;
-import com.dotcms.repackage.com.bradmcevoy.http.ResourceFactory;
+import com.dotcms.repackage.io.milton.http.HttpManager;
+import com.dotcms.repackage.io.milton.http.ResourceFactory;
+import com.dotcms.repackage.io.milton.resource.Resource;
+import com.dotcms.repackage.io.milton.servlet.Config;
+import com.dotcms.repackage.io.milton.servlet.Initable;
 import com.dotmarketing.beans.Host;
 import com.dotmarketing.business.APILocator;
 import com.dotmarketing.db.HibernateUtil;
@@ -15,7 +15,6 @@ import com.dotmarketing.exception.DotHibernateException;
 import com.dotmarketing.portlets.contentlet.business.HostAPI;
 import com.dotmarketing.portlets.fileassets.business.IFileAsset;
 import com.dotmarketing.portlets.folders.model.Folder;
-import com.dotmarketing.util.Config;
 import com.dotmarketing.util.InodeUtils;
 import com.dotmarketing.util.Logger;
 import com.liferay.portal.model.User;
@@ -31,12 +30,12 @@ public class ResourceFactorytImpl implements ResourceFactory, Initable {
 	private static final String AUTOPUB_PATH = "/webdav/autopub";
 	private static final String NONPUB_PATH = "/webdav/nonpub";
 	private HostAPI hostAPI = APILocator.getHostAPI();
-	
+
 	public ResourceFactorytImpl() {
 		super();
 		dotDavHelper = new DotWebdavHelper();
 	}
-	
+
 	/* (non-Javadoc)
 	 * @see com.dotcms.repackage.com.bradmcevoy.http.ResourceFactory#getResource(java.lang.String, java.lang.String)
 	 */
@@ -50,15 +49,15 @@ public class ResourceFactorytImpl implements ResourceFactory, Initable {
 			boolean autoPub = url.startsWith(AUTOPUB_PATH);
 			boolean nonPub = url.startsWith(NONPUB_PATH);
 			Host host =null;
-			String actualPath = ""; 
-			
+			String actualPath = "";
+
 			// DAV ROOT
 			if(isWebDavRoot){
 				WebdavRootResourceImpl wr = new WebdavRootResourceImpl(url);
 				return wr;
 			}
-			
-			
+
+
 			//SETUP
 			if(autoPub){
 				actualPath = url.replaceAll(AUTOPUB_PATH, "");
@@ -73,16 +72,16 @@ public class ResourceFactorytImpl implements ResourceFactory, Initable {
 			}else{
 				return null;
 			}
-			
+
 			String[] splitPath = actualPath.split("/");
-			
-			
+
+
 			User user=APILocator.getUserAPI().getSystemUser();
-			
-			
+
+
 			// Handle root SYSTEM or Root Host view
 			if(splitPath != null && splitPath.length == 1){
-			    if(dotDavHelper.isTempResource(url)){ 
+			    if(dotDavHelper.isTempResource(url)){
 			        return null;
 			    }
 			    else {
@@ -96,8 +95,8 @@ public class ResourceFactorytImpl implements ResourceFactory, Initable {
     				}
 			    }
 			}
-		
-			
+
+
 			// handle crappy dav clients temp files
 			if(dotDavHelper.isTempResource(url)){
 				java.io.File tempFile = dotDavHelper.loadTempFile(url);
@@ -111,10 +110,10 @@ public class ResourceFactorytImpl implements ResourceFactory, Initable {
 					return tr;
 				}
 			}
-			
-			
+
+
 			// handle language files
-			if(actualPath.endsWith("system/languages") || actualPath.endsWith("system/languages/") 
+			if(actualPath.endsWith("system/languages") || actualPath.endsWith("system/languages/")
 					|| actualPath.endsWith("system/languages/archived") || actualPath.endsWith("system/languages/archived/")){
 		        java.io.File file = new java.io.File(FileUtil.getRealPath("/assets/messages"));
 				if(file.exists() && file.isDirectory()){
@@ -131,7 +130,7 @@ public class ResourceFactorytImpl implements ResourceFactory, Initable {
 					}
 				}
 			}
-			
+
 			// handle the language files
 			if(actualPath.endsWith("/")){
 				actualPath = actualPath.substring(0, actualPath.length()-1);
@@ -169,23 +168,23 @@ public class ResourceFactorytImpl implements ResourceFactory, Initable {
 					return new TemplateFolderResourceImpl(url,host);
 				}
 				else{
-					//Template t = 
+					//Template t =
 					//return new TemplateFileResourceImpl(, host)
 				}
 			}
 			**/
-			
+
 			if(dotDavHelper.isResource(url,user)){
 				isResource = true;
 			}
-			
+
 			if(dotDavHelper.isFolder(url,user)){
 				isFolder = true;
 			}
 			if(!isFolder && !isResource){
 				return null;
 			}
-			
+
 			if(!isFolder && isResource){
 				IFileAsset file = dotDavHelper.loadFile(url,user);
 				if(file == null || !InodeUtils.isSet(file.getInode())){
@@ -223,7 +222,7 @@ public class ResourceFactorytImpl implements ResourceFactory, Initable {
 				}
 			}
 		}
-		
+
 	}
 
 	/* (non-Javadoc)
@@ -233,13 +232,13 @@ public class ResourceFactorytImpl implements ResourceFactory, Initable {
 		return "1,2";
 	}
 
-    public void init(ApplicationConfig config, HttpManager manager) {
+    public void init(Config config, HttpManager manager) {
         manager.setEnableExpectContinue(false);
     }
 
     public void destroy(HttpManager manager) {
         // TODO Auto-generated method stub
-        
+
     }
 
 }

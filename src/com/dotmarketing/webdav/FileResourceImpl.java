@@ -7,23 +7,22 @@ import java.io.OutputStream;
 import java.util.Date;
 import java.util.Map;
 
-import com.dotcms.repackage.com.bradmcevoy.http.Auth;
-import com.dotcms.repackage.com.bradmcevoy.http.CollectionResource;
-import com.dotcms.repackage.com.bradmcevoy.http.FileItem;
-import com.dotcms.repackage.com.bradmcevoy.http.FileResource;
-import com.dotcms.repackage.com.bradmcevoy.http.HttpManager;
-import com.dotcms.repackage.com.bradmcevoy.http.LockInfo;
-import com.dotcms.repackage.com.bradmcevoy.http.LockResult;
-import com.dotcms.repackage.com.bradmcevoy.http.LockTimeout;
-import com.dotcms.repackage.com.bradmcevoy.http.LockToken;
-import com.dotcms.repackage.com.bradmcevoy.http.LockableResource;
-import com.dotcms.repackage.com.bradmcevoy.http.Range;
-import com.dotcms.repackage.com.bradmcevoy.http.Request;
-import com.dotcms.repackage.com.bradmcevoy.http.Request.Method;
+import com.dotcms.repackage.io.milton.http.Auth;
+import com.dotcms.repackage.io.milton.http.FileItem;
+import com.dotcms.repackage.io.milton.http.HttpManager;
+import com.dotcms.repackage.io.milton.http.LockInfo;
+import com.dotcms.repackage.io.milton.http.LockResult;
+import com.dotcms.repackage.io.milton.http.LockTimeout;
+import com.dotcms.repackage.io.milton.http.LockToken;
+import com.dotcms.repackage.io.milton.http.Range;
+import com.dotcms.repackage.io.milton.http.Request;
+import com.dotcms.repackage.io.milton.http.Request.Method;
+import com.dotcms.repackage.io.milton.resource.CollectionResource;
+import com.dotcms.repackage.io.milton.resource.FileResource;
+import com.dotcms.repackage.io.milton.resource.LockableResource;
 import com.dotmarketing.business.APILocator;
 import com.dotmarketing.business.PermissionAPI;
 import com.dotmarketing.business.Permissionable;
-import com.dotmarketing.business.Versionable;
 import com.dotmarketing.exception.DotDataException;
 import com.dotmarketing.exception.DotRuntimeException;
 import com.dotmarketing.portlets.contentlet.model.Contentlet;
@@ -43,7 +42,7 @@ public class FileResourceImpl implements FileResource, LockableResource {
 	String path;
 	private boolean isAutoPub = false;
 	private PermissionAPI perAPI;
-	
+
 	public FileResourceImpl(IFileAsset file, String path) {
 		perAPI = APILocator.getPermissionAPI();
 		dotDavHelper = new DotWebdavHelper();
@@ -51,7 +50,7 @@ public class FileResourceImpl implements FileResource, LockableResource {
 		this.path = path;
 		this.file = file;
 	}
-	
+
 	public void copyTo(CollectionResource collRes, String name) throws DotRuntimeException {
 	    User user=(User)HttpManager.request().getAuthorization().getTag();
 		if(collRes instanceof TempFolderResourceImpl){
@@ -87,7 +86,7 @@ public class FileResourceImpl implements FileResource, LockableResource {
 
 	public boolean authorise(Request req, Method method, Auth auth) {
 		try {
-			
+
 			if(auth == null)
 				return false;
 			else {
@@ -197,7 +196,7 @@ public class FileResourceImpl implements FileResource, LockableResource {
 				return;
 			}
 		}
-		else if(collRes instanceof BasicFolderResourceImpl) { 
+		else if(collRes instanceof BasicFolderResourceImpl) {
 			try {
 			    String p = ((BasicFolderResourceImpl)collRes).getPath();
 				if(!p.endsWith("/"))
@@ -261,7 +260,7 @@ public class FileResourceImpl implements FileResource, LockableResource {
 	public LockToken getCurrentLock() {
 		return dotDavHelper.getCurrentLock(getUniqueId());
 	}
-	
+
 	public Long getMaxAgeSeconds(Auth arg0) {
 		return (long)60;
 	}

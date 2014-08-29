@@ -1,17 +1,10 @@
 package com.ettrema.httpclient;
 
-import com.dotcms.repackage.com.bradmcevoy.common.Path;
-import com.dotcms.repackage.com.bradmcevoy.http.Range;
-import com.dotcms.repackage.com.bradmcevoy.http.Response;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.BadRequestException;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.ConflictException;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.NotAuthorizedException;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.NotFoundException;
 import com.ettrema.cache.Cache;
 import com.ettrema.cache.MemoryCache;
-import com.dotcms.repackage.com.ettrema.common.LogUtils;
 import com.ettrema.httpclient.Utils.CancelledException;
 import com.ettrema.httpclient.zsyncclient.FileSyncer;
+
 import java.io.*;
 import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
@@ -20,6 +13,15 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+
+import com.dotcms.repackage.io.milton.common.LogUtils;
+import com.dotcms.repackage.io.milton.common.Path;
+import com.dotcms.repackage.io.milton.http.Range;
+import com.dotcms.repackage.io.milton.http.Response;
+import com.dotcms.repackage.io.milton.http.exceptions.BadRequestException;
+import com.dotcms.repackage.io.milton.http.exceptions.ConflictException;
+import com.dotcms.repackage.io.milton.http.exceptions.NotAuthorizedException;
+import com.dotcms.repackage.io.milton.http.exceptions.NotFoundException;
 import com.dotcms.repackage.org.apache.commons.httpclient.*;
 import com.dotcms.repackage.org.apache.commons.httpclient.auth.AuthScope;
 import com.dotcms.repackage.org.apache.commons.httpclient.cookie.CookiePolicy;
@@ -70,7 +72,7 @@ public class Host extends Folder {
 //    System.setProperty("org.apache.commons.logging.Log", "org.apache.commons.logging.impl.SimpleLog");
 //    System.setProperty("org.apache.commons.logging.simplelog.showdatetime", "true");
 //    System.setProperty("org.apache.commons.logging.simplelog.log.httpclient.wire.header", "debug");
-//    System.setProperty("org.apache.commons.logging.simplelog.log.org.apache.commons.httpclient", "debug");    
+//    System.setProperty("org.apache.commons.logging.simplelog.log.org.apache.commons.httpclient", "debug");
     }
 
     public Host(String server, Integer port, String user, String password, ProxyDetails proxyDetails) {
@@ -749,7 +751,7 @@ public class Host extends Folder {
             if (i > 0) {
                 url += "/";
             }
-            url += com.dotcms.repackage.com.bradmcevoy.http.Utils.percentEncode(s);
+            url += com.dotcms.repackage.io.milton.common.Utils.percentEncode(s);
         }
         return url;
     }
@@ -765,6 +767,6 @@ public class Host extends Folder {
     public HttpClient getClient() {
         return client;
     }
-    
-    
+
+
 }

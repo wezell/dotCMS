@@ -1,5 +1,5 @@
 /**
- * 
+ *
  */
 package com.dotmarketing.webdav;
 
@@ -11,19 +11,22 @@ import java.util.Date;
 import java.util.List;
 import java.util.Map;
 
-import com.dotcms.repackage.com.bradmcevoy.http.Auth;
-import com.dotcms.repackage.com.bradmcevoy.http.CollectionResource;
-import com.dotcms.repackage.com.bradmcevoy.http.FolderResource;
-import com.dotcms.repackage.com.bradmcevoy.http.LockInfo;
-import com.dotcms.repackage.com.bradmcevoy.http.LockResult;
-import com.dotcms.repackage.com.bradmcevoy.http.LockTimeout;
-import com.dotcms.repackage.com.bradmcevoy.http.LockToken;
-import com.dotcms.repackage.com.bradmcevoy.http.LockingCollectionResource;
-import com.dotcms.repackage.com.bradmcevoy.http.Range;
-import com.dotcms.repackage.com.bradmcevoy.http.Request;
-import com.dotcms.repackage.com.bradmcevoy.http.Resource;
-import com.dotcms.repackage.com.bradmcevoy.http.Request.Method;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.NotAuthorizedException;
+import com.dotcms.repackage.io.milton.http.Auth;
+import com.dotcms.repackage.io.milton.http.FileItem;
+import com.dotcms.repackage.io.milton.http.LockInfo;
+import com.dotcms.repackage.io.milton.http.LockResult;
+import com.dotcms.repackage.io.milton.http.LockTimeout;
+import com.dotcms.repackage.io.milton.http.LockToken;
+import com.dotcms.repackage.io.milton.http.Range;
+import com.dotcms.repackage.io.milton.http.Request;
+import com.dotcms.repackage.io.milton.http.Request.Method;
+import com.dotcms.repackage.io.milton.http.exceptions.BadRequestException;
+import com.dotcms.repackage.io.milton.http.exceptions.ConflictException;
+import com.dotcms.repackage.io.milton.http.exceptions.NotAuthorizedException;
+import com.dotcms.repackage.io.milton.resource.CollectionResource;
+import com.dotcms.repackage.io.milton.resource.FileResource;
+import com.dotcms.repackage.io.milton.resource.LockingCollectionResource;
+import com.dotcms.repackage.io.milton.resource.Resource;
 import com.dotmarketing.business.Role;
 import com.dotmarketing.util.Logger;
 import com.liferay.portal.model.User;
@@ -32,15 +35,15 @@ import com.liferay.portal.model.User;
  * @author jasontesser
  *
  */
-public class SystemRootResourceImpl implements FolderResource, LockingCollectionResource {
+public class SystemRootResourceImpl implements FileResource, LockingCollectionResource {
 
 	private DotWebdavHelper dotDavHelper;
-	
-	
+
+
 	public SystemRootResourceImpl() {
 		dotDavHelper = new DotWebdavHelper();
 	}
-	
+
 	/* (non-Javadoc)
 	 * @see com.dotcms.repackage.com.bradmcevoy.http.MakeCollectionableResource#createCollection(java.lang.String)
 	 */
@@ -71,7 +74,7 @@ public class SystemRootResourceImpl implements FolderResource, LockingCollection
 	public Object authenticate(String username, String password) {
 		try {
 			User user =  dotDavHelper.authorizePrincipal(username, password);
-			//Get the Administrator Role to validate if the user has permission			
+			//Get the Administrator Role to validate if the user has permission
 			Role cmsAdminRole = com.dotmarketing.business.APILocator.getRoleAPI().loadCMSAdminRole();
 			if(com.dotmarketing.business.APILocator.getRoleAPI().doesUserHaveRole(user, cmsAdminRole.getId())){
 				return user;
@@ -223,6 +226,14 @@ public class SystemRootResourceImpl implements FolderResource, LockingCollection
 			throws NotAuthorizedException {
 		createCollection(name);
 		return lock(timeout, lockInfo).getLockToken();
+	}
+
+	@Override
+	public String processForm(Map<String, String> arg0,
+			Map<String, FileItem> arg1) throws BadRequestException,
+			NotAuthorizedException, ConflictException {
+		// TODO Auto-generated method stub
+		return null;
 	}
 
 }

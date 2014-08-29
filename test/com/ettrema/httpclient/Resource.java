@@ -1,14 +1,8 @@
 package com.ettrema.httpclient;
 
-import com.dotcms.repackage.com.bradmcevoy.common.Path;
-import com.dotcms.repackage.com.bradmcevoy.http.DateUtils;
-import com.dotcms.repackage.com.bradmcevoy.http.DateUtils.DateParseException;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.BadRequestException;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.ConflictException;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.NotAuthorizedException;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.NotFoundException;
 import com.ettrema.cache.Cache;
 import com.ettrema.httpclient.PropFindMethod.Response;
+
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.URI;
@@ -17,6 +11,14 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
+
+import com.dotcms.repackage.io.milton.common.Path;
+import com.dotcms.repackage.io.milton.http.DateUtils;
+import com.dotcms.repackage.io.milton.http.DateUtils.DateParseException;
+import com.dotcms.repackage.io.milton.http.exceptions.BadRequestException;
+import com.dotcms.repackage.io.milton.http.exceptions.ConflictException;
+import com.dotcms.repackage.io.milton.http.exceptions.NotAuthorizedException;
+import com.dotcms.repackage.io.milton.http.exceptions.NotFoundException;
 import com.dotcms.repackage.org.apache.commons.lang.StringUtils;
 import com.dotcms.repackage.org.slf4j.Logger;
 import com.dotcms.repackage.org.slf4j.LoggerFactory;
@@ -78,7 +80,7 @@ public abstract class Resource {
     private String lockToken;
 
     public abstract java.io.File downloadTo(java.io.File destFolder, ProgressListener listener) throws FileNotFoundException, IOException, HttpException, Utils.CancelledException, NotAuthorizedException, BadRequestException;
-    
+
     private static long count = 0;
 
     public static long getCount() {
@@ -205,16 +207,16 @@ public abstract class Resource {
     }
 
     public void copyTo(Folder folder, String destName) throws IOException, HttpException, NotAuthorizedException, ConflictException, BadRequestException, NotFoundException  {
-        host().doCopy(encodedUrl(), folder.encodedUrl() + com.dotcms.repackage.com.bradmcevoy.http.Utils.percentEncode(destName));
+        host().doCopy(encodedUrl(), folder.encodedUrl() + com.dotcms.repackage.io.milton.common.Utils.percentEncode(destName));
         folder.flush();
     }
-    
+
     public void rename(String newName) throws IOException, HttpException, NotAuthorizedException, ConflictException, BadRequestException, NotFoundException  {
         String dest = "";
         if (parent != null) {
             dest = parent.encodedUrl();
         }
-        dest = dest + com.dotcms.repackage.com.bradmcevoy.http.Utils.percentEncode(newName);
+        dest = dest + com.dotcms.repackage.io.milton.common.Utils.percentEncode(newName);
         int res = host().doMove(encodedUrl(), dest);
         if (res == 201) {
             this.name = newName;
@@ -226,7 +228,7 @@ public abstract class Resource {
     }
     public void moveTo(Folder folder, String destName) throws IOException, HttpException, NotAuthorizedException, ConflictException, BadRequestException, NotFoundException  {
         log.info("Move: " + this.href() + " to " + folder.href());
-        int res = host().doMove(encodedUrl(), folder.href() + com.dotcms.repackage.com.bradmcevoy.http.Utils.percentEncode(destName));
+        int res = host().doMove(encodedUrl(), folder.href() + com.dotcms.repackage.io.milton.common.Utils.percentEncode(destName));
         if (res == 201) {
             this.parent.flush();
             folder.flush();
@@ -266,7 +268,7 @@ public abstract class Resource {
     }
 
     public String encodedName() {
-        return com.dotcms.repackage.com.bradmcevoy.http.Utils.percentEncode(name);
+        return com.dotcms.repackage.io.milton.common.Utils.percentEncode(name);
     }
 
     /**

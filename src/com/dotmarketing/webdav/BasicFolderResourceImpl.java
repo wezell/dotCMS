@@ -7,15 +7,15 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.Map;
 
+import com.dotcms.repackage.io.milton.http.Auth;
+import com.dotcms.repackage.io.milton.http.HttpManager;
+import com.dotcms.repackage.io.milton.http.Range;
+import com.dotcms.repackage.io.milton.http.exceptions.BadRequestException;
+import com.dotcms.repackage.io.milton.http.exceptions.NotAuthorizedException;
+import com.dotcms.repackage.io.milton.http.exceptions.NotFoundException;
+import com.dotcms.repackage.io.milton.resource.FolderResource;
+import com.dotcms.repackage.io.milton.resource.Resource;
 import com.dotcms.repackage.org.dts.spell.utils.FileUtils;
-import com.dotcms.repackage.com.bradmcevoy.http.Auth;
-import com.dotcms.repackage.com.bradmcevoy.http.FolderResource;
-import com.dotcms.repackage.com.bradmcevoy.http.HttpManager;
-import com.dotcms.repackage.com.bradmcevoy.http.Range;
-import com.dotcms.repackage.com.bradmcevoy.http.Resource;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.BadRequestException;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.NotAuthorizedException;
-import com.dotcms.repackage.com.bradmcevoy.http.exceptions.NotFoundException;
 import com.dotmarketing.beans.Host;
 import com.dotmarketing.business.APILocator;
 import com.dotmarketing.business.PermissionAPI;
@@ -29,12 +29,12 @@ import com.dotmarketing.util.Logger;
 import com.liferay.portal.model.User;
 
 public abstract class BasicFolderResourceImpl implements FolderResource {
-    
+
     protected String path;
     protected Host host;
     protected boolean isAutoPub;
     protected DotWebdavHelper dotDavHelper=new DotWebdavHelper();
-    
+
     public BasicFolderResourceImpl(String path) {
         this.path=path;
         try {
@@ -45,20 +45,20 @@ public abstract class BasicFolderResourceImpl implements FolderResource {
         }
         this.isAutoPub=dotDavHelper.isAutoPub(path);
     }
-    
+
     public Resource createNew(String newName, InputStream in, Long length, String contentType) throws IOException, DotRuntimeException {
     	if(newName.matches("^\\.(.*)-Spotlight$")){
             // http://jira.dotmarketing.net/browse/DOTCMS-7285
             return null;
     	}
-   
+
         User user=(User)HttpManager.request().getAuthorization().getTag();
-        
+
         if(!path.endsWith("/")){
             path = path + "/";
         }
         if(!dotDavHelper.isTempResource(newName)){
-            
+
             try {
                 dotDavHelper.createResource(path + newName, isAutoPub, user);
             } catch (Exception e) {
@@ -71,20 +71,20 @@ public abstract class BasicFolderResourceImpl implements FolderResource {
                 f = dotDavHelper.loadFile(path + newName,user);
                 FileResourceImpl fr = new FileResourceImpl(f, f.getFileName());
                 return fr;
-                
+
             }catch (DotSecurityException dotE){
-            	Logger.error(this, "An error occurred while creating new file: " + (newName != null ? newName : "Unknown") 
-                		+ " in this path: " + (path != null ? path : "Unknown") + " " 
+            	Logger.error(this, "An error occurred while creating new file: " + (newName != null ? newName : "Unknown")
+                		+ " in this path: " + (path != null ? path : "Unknown") + " "
                 		+ dotE.getMessage(), dotE);
             	throw new DotRuntimeException(dotE.getMessage(), dotE);
-            	
+
             }catch (Exception e) {
-                Logger.error(this, "An error occurred while creating new file: " + (newName != null ? newName : "Unknown") 
-                		+ " in this path: " + (path != null ? path : "Unknown") + " " 
+                Logger.error(this, "An error occurred while creating new file: " + (newName != null ? newName : "Unknown")
+                		+ " in this path: " + (path != null ? path : "Unknown") + " "
                 		+ e.getMessage(), e);
             }
         }
-        
+
         String p = path;
         if(!p.endsWith("/")){
             p = p + "/";
@@ -95,7 +95,7 @@ public abstract class BasicFolderResourceImpl implements FolderResource {
         return tr;
     }
 
-    
+
     public void delete() throws DotRuntimeException{
         User user=(User)HttpManager.request().getAuthorization().getTag();
         try {
@@ -117,7 +117,7 @@ public abstract class BasicFolderResourceImpl implements FolderResource {
             NotAuthorizedException, BadRequestException, NotFoundException {
         return;
     }
-    
+
     public String getPath() {
         return path;
     }
