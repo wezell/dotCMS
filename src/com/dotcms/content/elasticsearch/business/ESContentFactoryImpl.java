@@ -1132,7 +1132,10 @@ public class ESContentFactoryImpl extends ContentletFactory {
         List<Map<String,Object>> res = db.loadObjectResults();
         List<Contentlet> cons = new ArrayList<>();
         for(Map<String,Object> map :res ){
-            cons.add(find((String) map.get("mynode")));
+            Contentlet c = find((String) map.get("mynode"));
+            if(c!=null && c.getInode()!=null){
+                cons.add(c);
+            }
         }
         return cons;
     }
