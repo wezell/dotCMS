@@ -17,9 +17,11 @@ branches:
     - master
 
 language: java
-java:
-  - '1.8'
 
+  
+git:
+  submodules: false
+  
 env:
   global:
     - GCLOUD_DIR=${HOME}/gcloud
