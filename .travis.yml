@@ -34,5 +34,5 @@ install:
 - travis/install_gcloud.sh
 
 script:
-- gcloud builds submit --config=cloudbuild.yaml .
+- gcloud builds submit --config=travis/cloudbuild.yaml .
 
