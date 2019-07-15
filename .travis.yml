@@ -18,6 +18,8 @@ branches:
 
 language: java
 
+services:
+  - docker
   
 git:
   submodules: false

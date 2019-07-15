@@ -1,0 +1,6 @@
+steps:
+- name: 'gcr.io/cloud-builders/docker'
+  args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/dotcms-image', '--build-arg', 'BUILD_FROM=COMMIT', '--build-arg', 'BUILD_ID=origin/master', '.' ]
+images:
+- 'gcr.io/$PROJECT_ID/dotcms-image'
+timeout: 1800s
