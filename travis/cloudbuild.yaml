@@ -1,6 +1,6 @@
 steps:
-- name: 'gcr.io/cloud-builders/docker'
-  args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/dotcms-image', '--build-arg', 'BUILD_FROM=COMMIT', '--build-arg', 'BUILD_ID=origin/master', '.' ]
+- name: "gcr.io/dotcms/dotcms-$TRAVIS_BRANCH-$TRAVIS_COMMIT"
+  args: [ 'build', '-t', "gcr.io/$GOOGLE_PROJECT_ID/dotcms-$TRAVIS_BRANCH-$TRAVIS_COMMIT", '--build-arg', 'BUILD_FROM=COMMIT', '--build-arg', "BUILD_ID=$TRAVIS_COMMIT", '.' ]
 images:
 - 'gcr.io/$PROJECT_ID/dotcms-image'
 timeout: 1800s
