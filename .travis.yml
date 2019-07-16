@@ -17,11 +17,6 @@ git:
 branches:
   only:
     - master
-
-language: java
-
-services:
-  - docker
   
 git:
   submodules: false
@@ -34,14 +29,16 @@ env:
     - CLOUDSDK_CORE_DISABLE_PROMPTS=1
 
 script:
-- ls -la
-- pwd
-
+- echo `ls -la`
+- echo `pwd`
 
 install:
 - travis/environment_vars.sh
 - travis/install_gcloud.sh
 
 script:
-- gcloud builds submit --config=travis/cloudbuild.yaml --substitutions=TRAVIS_BRANCH=$TRAVIS_BRANCH --substitutions=GOOGLE_PROJECT_ID=$GOOGLE_PROJECT_ID --substitutions=TRAVIS_COMMIT=$TRAVIS_COMMIT .
+- echo `TRAVIS_COMMIT : $TRAVIS_COMMIT`
+- echo `TRAVIS_BRANCH : $TRAVIS_BRANCH`
+- echo `GOOGLE_PROJECT_ID : $GOOGLE_PROJECT_ID`
+- gcloud builds submit --config=travis/cloudbuild.yaml --substitutions=BRANCH_NAME=$TRAVIS_BRANCH --substitutions=PROJECT_ID=$GOOGLE_PROJECT_ID --substitutions=COMMIT_SHA=$TRAVIS_COMMIT .
 
