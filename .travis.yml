@@ -41,5 +41,5 @@ install:
 - travis/install_gcloud.sh
 
 script:
-- gcloud builds submit --config=travis/cloudbuild.yaml .
+- gcloud builds submit --config=travis/cloudbuild.yaml --substitutions=TRAVIS_BRANCH=$TRAVIS_BRANCH --substitutions=GOOGLE_PROJECT_ID=$GOOGLE_PROJECT_ID --substitutions=TRAVIS_COMMIT=$TRAVIS_COMMIT .
 
