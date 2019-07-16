@@ -1,5 +1,5 @@
 steps:
-- name: "gcr.io/cicd-246518/dotcms-$BRANCH_NAME-$COMMIT_SHA"
+- name: 'gcr.io/cloud-builders/docker'
   env:
   - 'BRANCH_NAME=$BRANCH_NAME'
   - 'COMMIT_SHA=$COMMIT_SHA'
