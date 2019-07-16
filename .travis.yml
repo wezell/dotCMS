@@ -37,8 +37,8 @@ install:
 - travis/install_gcloud.sh
 
 script:
-- echo `TRAVIS_COMMIT : $TRAVIS_COMMIT`
-- echo `TRAVIS_BRANCH : $TRAVIS_BRANCH`
-- echo `GOOGLE_PROJECT_ID : $GOOGLE_PROJECT_ID`
+- echo "TRAVIS_COMMIT : $TRAVIS_COMMIT"
+- echo "TRAVIS_BRANCH : $TRAVIS_BRANCH"
+- echo "GOOGLE_PROJECT_ID : $GOOGLE_PROJECT_ID"
 - gcloud builds submit --config=travis/cloudbuild.yaml --substitutions=BRANCH_NAME=$TRAVIS_BRANCH --substitutions=PROJECT_ID=$GOOGLE_PROJECT_ID --substitutions=COMMIT_SHA=$TRAVIS_COMMIT .
 

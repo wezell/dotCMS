@@ -38,3 +38,7 @@ fi
 
 gcloud auth activate-service-account --key-file="${GOOGLE_CREDENTIALS}"
 gcloud config set project "${GOOGLE_PROJECT_ID}"
+
+echo "TRAVIS_COMMIT : $TRAVIS_COMMIT"
+echo "TRAVIS_BRANCH : $TRAVIS_BRANCH"
+echo "GOOGLE_PROJECT_ID : $GOOGLE_PROJECT_ID"
