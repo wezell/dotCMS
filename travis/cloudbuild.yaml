@@ -1,8 +1,8 @@
 steps:
-- name: "gcr.io/dotcms/dotcms-$BRANCH_NAME-$COMMIT_SHA"
+- name: "gcr.io/cicd-246518/dotcms-$BRANCH_NAME-$COMMIT_SHA"
   env:
   - 'BRANCH_NAME=$BRANCH_NAME'
   - 'COMMIT_SHA=$COMMIT_SHA'
-  args: [ 'build', '-t', "gcr.io/dotcms/dotcms-$BRANCH_NAME-$COMMIT_SHA", '--build-arg', 'BUILD_FROM=COMMIT', '--build-arg', "BUILD_ID=$COMMIT_SHA", '.' ]
+  args: [ 'build', '-t', "gcr.io/cicd-246518/dotcms-$BRANCH_NAME-$COMMIT_SHA", '--build-arg', 'BUILD_FROM=COMMIT', '--build-arg', "BUILD_ID=$COMMIT_SHA", '.' ]
 
 timeout: 1800s
