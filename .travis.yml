@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 git:
-  sparse_checkout: travis/
+  clone: false
   
 branches:
   only:
