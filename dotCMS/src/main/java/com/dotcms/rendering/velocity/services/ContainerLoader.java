@@ -21,6 +21,7 @@ import com.dotmarketing.portlets.templates.design.bean.ContainerUUID;
 import com.dotmarketing.util.Logger;
 import com.dotmarketing.util.PageMode;
 import com.dotmarketing.util.UtilMethods;
+import com.liferay.util.StringPool;
 import org.apache.velocity.runtime.resource.ResourceManager;
 
 import java.io.InputStream;
@@ -31,33 +32,39 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static com.liferay.util.StringPool.PERIOD;
+
 /**
  * @author will
  */
 public class ContainerLoader implements DotLoader {
 
     public static final String SHOW_PRE_POST_LOOP="SHOW_PRE_POST_LOOP";
+    public static final String FILE_CONTAINER_PATH_SEPARATOR_IN_VELOCITY_KEY = "%";
+    public static final String HOST_NAME_SEPARATOR_IN_VELOCITY_KEY = "#";
+    public static final String RESOLVE_RELATIVE = "resolve_relative";
 
     @Override
     public InputStream writeObject(final VelocityResourceKey key)
             throws DotDataException, DotSecurityException {
 
-        final ContainerFinderStrategyResolver resolver   =
-                ContainerFinderStrategyResolver.getInstance();
-        final Optional<ContainerFinderStrategy> strategy =
-                resolver.get(key);
-
         try {
-            final Container container = strategy.isPresent() ?
-                    strategy.get().apply(key) : resolver.getDefaultStrategy().apply(key);
+            final String containerIdOrPath = key.path.split(StringPool.FORWARD_SLASH)[2]
+                    .replaceAll(RESOLVE_RELATIVE + FILE_CONTAINER_PATH_SEPARATOR_IN_VELOCITY_KEY, "")
+                    .replaceAll(FILE_CONTAINER_PATH_SEPARATOR_IN_VELOCITY_KEY, StringPool.FORWARD_SLASH)
+                    .replaceAll(HOST_NAME_SEPARATOR_IN_VELOCITY_KEY, PERIOD);
 
-            if (null == container) {
+            final Optional<Container> optionalContainer =
+                    APILocator.getContainerAPI().findContainer(containerIdOrPath, APILocator.systemUser(), key.mode.showLive, key.mode.respectAnonPerms);
+
+            if (!optionalContainer.isPresent()) {
 
                 final DotStateException dotStateException = new DotStateException("Cannot find container for : " + key);
                 new ContainerExceptionNotifier(dotStateException, UtilMethods.isSet(key.id1) ? key.id1 : key.path).notifyUser();
                 throw dotStateException;
             }
 
+            final Container container = optionalContainer.get();
             if (container.isArchived()) {
 
                 throw new DotStateException("The container  : " + key  + " is archived");
@@ -153,8 +160,9 @@ public class ContainerLoader implements DotLoader {
     private String getDataDotIdentifier (final Container container) {
 
         return container instanceof FileAssetContainer?
-                FileAssetContainer.class.cast(container).getPath():
+                FileAssetContainerUtil.getInstance().getFullPath((FileAssetContainer) container):
                 container.getIdentifier();
+
     }
 
 
@@ -170,7 +178,7 @@ public class ContainerLoader implements DotLoader {
 
         // let's write this puppy out to our file
         velocityCodeBuilder.append("#set ($SERVER_NAME =$host.getHostname() )");
-        velocityCodeBuilder.append("#set ($CONTAINER_IDENTIFIER_INODE = '")
+        velocityCodeBuilder.append("#set ($CONTAINER_IDENTIFIER = '")
             .append(container.getIdentifier())
             .append("')");
         velocityCodeBuilder.append("#set ($CONTAINER_UNIQUE_ID = '")
@@ -186,18 +194,16 @@ public class ContainerLoader implements DotLoader {
             .append(container.getInode())
             .append("')");
 
-        velocityCodeBuilder.append("#set ($CONTENTLETS = $contentletList")
-            .append(container.getIdentifier())
-            .append(uuid)
-            .append(")");
-        velocityCodeBuilder.append("#set ($CONTAINER_NUM_CONTENTLETS = $totalSize")
-            .append(container.getIdentifier())
-            .append(uuid)
-            .append(")");
+        // START CONTENT LOOP
 
-        velocityCodeBuilder.append("#if(!$CONTAINER_NUM_CONTENTLETS)")
-            .append("#set($CONTAINER_NUM_CONTENTLETS = 0)")
-            .append("#end");
+        // the viewtool call to get the list of contents for the container
+        String apiCall="$containerAPI.getPersonalizedContentList(\"$!HTMLPAGE_IDENTIFIER\",\"$!CONTAINER_IDENTIFIER\", \"$!CONTAINER_UNIQUE_ID\")";
+        
+        velocityCodeBuilder.append("#set ($CONTENTLETS = ")
+        .append(apiCall)
+        .append(")");
+        velocityCodeBuilder.append("#set ($CONTAINER_NUM_CONTENTLETS = ${CONTENTLETS.size()})");
+
 
         velocityCodeBuilder.append("#set ($CONTAINER_NAME = \"")
             .append(UtilMethods.espaceForVelocity(container.getTitle()))
@@ -263,37 +269,38 @@ public class ContainerLoader implements DotLoader {
                 velocityCodeBuilder.append("#end");
             }
 
-            // sb.append("$contentletList" + identifier.getId() + uuid + "<br>");
+            // FOR LOOP
 
-            // START CONTENT LOOP
-            velocityCodeBuilder.append("#foreach ($contentletId in $contentletList")
-                .append(container.getIdentifier())
-                .append(uuid)
-                .append(")");
+            velocityCodeBuilder.append("#foreach ($contentletId in $CONTENTLETS )");
 
-                // sb.append("\n#if($webapi.canParseContent($contentletId,"+EDIT_MODE+")) ");
-                velocityCodeBuilder.append("#set($_show_working_=false)");
-    
-                // if timemachine future enabled
-                velocityCodeBuilder.append("#if($UtilMethods.isSet($request.getSession(false)) && $request.session.getAttribute(\"tm_date\"))");
-                velocityCodeBuilder.append("#set($_tmdate=$date.toDate($webapi.parseLong($request.session.getAttribute(\"tm_date\"))))");
-                velocityCodeBuilder.append("#set($_ident=$webapi.findIdentifierById($contentletId))");
-    
-                // if the content has expired we rewrite the identifier so it isn't loaded
-                velocityCodeBuilder.append("#if($UtilMethods.isSet($_ident.sysExpireDate) && $_tmdate.after($_ident.sysExpireDate))");
-                velocityCodeBuilder.append("#set($contentletId='')");
-                velocityCodeBuilder.append("#end");
-    
-                // if the content should be published then force to show the working version
-                velocityCodeBuilder.append("#if($UtilMethods.isSet($_ident.sysPublishDate) && $_tmdate.after($_ident.sysPublishDate))");
-                velocityCodeBuilder.append("#set($_show_working_=true)");
-                velocityCodeBuilder.append("#end");
-    
-                velocityCodeBuilder.append("#if(! $webapi.contentHasLiveVersion($contentletId) && ! $_show_working_)")
+              velocityCodeBuilder.append("#set($_show_working_=false)");
+
+            //Time-machine block begin
+              velocityCodeBuilder.append("#if($UtilMethods.isSet($request.getSession(false)) && $request.session.getAttribute(\"tm_date\"))");
+
+                  velocityCodeBuilder.append("#set($_tmdate=$date.toDate($webapi.parseLong($request.session.getAttribute(\"tm_date\"))))");
+                  velocityCodeBuilder.append("#set($_ident=$webapi.findIdentifierById($contentletId))");
+                  // if the content has expired we rewrite the identifier so it isn't loaded
+                  velocityCodeBuilder.append("#if($UtilMethods.isSet($_ident.sysExpireDate) && $_tmdate.after($_ident.sysExpireDate))");
+                  velocityCodeBuilder.append("#set($contentletId='')");
+                  velocityCodeBuilder.append("#end");
+
+                  // if the content should be published then force to show the working version
+                  velocityCodeBuilder.append("#if($UtilMethods.isSet($_ident.sysPublishDate) && ($_tmdate.equals($_ident.sysPublishDate) || $_tmdate.after($_ident.sysPublishDate)))");
+                  velocityCodeBuilder.append("#set($_show_working_=true)");
+                  velocityCodeBuilder.append("#end");
+
+                  velocityCodeBuilder.append("#if(! $webapi.contentHasLiveVersion($contentletId) && ! $_show_working_)")
                     .append("#set($contentletId='')") // working contentlet still not published
-                    .append("#end");
-                velocityCodeBuilder.append("#end");
-    
+                  .append("#end");
+
+                  velocityCodeBuilder.append("#if(!$UtilMethods.isSet($user)) ")
+                    .append("#set($user = $cmsuser.getLoggedInUser($request)) ")
+                  .append("#end");
+
+            //end of time-machine block
+              velocityCodeBuilder.append("#end");
+
                 velocityCodeBuilder.append("#set($CONTENT_INODE = '')");
                 velocityCodeBuilder.append("#set($CONTENT_BASE_TYPE = '')");
                 velocityCodeBuilder.append("#set($CONTENT_LANGUAGE = '')");
@@ -305,9 +312,9 @@ public class ContainerLoader implements DotLoader {
                 velocityCodeBuilder.append("#if($contentletId != '')");
                 velocityCodeBuilder.append("#contentDetail($contentletId)");
                 velocityCodeBuilder.append("#end");
-    
+
                 velocityCodeBuilder.append("#set($HAVE_A_VERSION=($CONTENT_INODE != ''))");
-                
+
                 if (mode == PageMode.EDIT_MODE) {
                     velocityCodeBuilder.append("<div")
                         .append(" data-dot-object=")
@@ -338,31 +345,41 @@ public class ContainerLoader implements DotLoader {
                 velocityCodeBuilder.append("#if($HAVE_A_VERSION)");
                 
                     // ##Checking permission to see content
-                    if (mode.showLive) velocityCodeBuilder.append("#if($contents.doesUserHasPermission($CONTENT_INODE, 1, $user, true))");
+                    if (mode.showLive) {
+                        velocityCodeBuilder.append("#if($_show_working_ || $contents.doesUserHasPermission($CONTENT_INODE, 1, $user, true))");
+                    }
                     
                         // ### START BODY ###
                         velocityCodeBuilder.append("#if($isWidget==true)").append("$widgetCode");
                         velocityCodeBuilder.append("#elseif($isForm==true)").append("$formCode");
                         velocityCodeBuilder.append("#else");
-            
+
                             for (int i = 0; i < containerContentTypeList.size(); i++) {
                                 ContainerStructure cs = containerContentTypeList.get(i);
                                 String ifelse = (i == 0) ? "if" : "elseif";
-                                velocityCodeBuilder.append("#" + ifelse + "($ContentletStructure ==\"" + cs.getStructureId() + "\")");
+                                velocityCodeBuilder.append("#").append(ifelse)
+                                        .append("($ContentletStructure ==\"")
+                                        .append(cs.getStructureId()).append("\")");
                                 velocityCodeBuilder.append(cs.getCode());
                             }
-                            if (containerContentTypeList.size() > 0) velocityCodeBuilder.append("#end");
+                            if (containerContentTypeList.size() > 0) {
+                                velocityCodeBuilder.append("#end");
+                            }
                             
                         // ### END BODY ###
                         velocityCodeBuilder.append("#end");
         
-                    if (mode.showLive) velocityCodeBuilder.append("#end");
+                    if (mode.showLive) {
+                        velocityCodeBuilder.append("#end");
+                    }
                     
                 // end if content exists in language 
                 velocityCodeBuilder.append("#end");
 
                // end content dot-data-content
-            if (mode == PageMode.EDIT_MODE) velocityCodeBuilder.append("</div>");
+            if (mode == PageMode.EDIT_MODE) {
+                velocityCodeBuilder.append("</div>");
+            }
                 
                 // ##End of foreach loop
             velocityCodeBuilder.append("#end");

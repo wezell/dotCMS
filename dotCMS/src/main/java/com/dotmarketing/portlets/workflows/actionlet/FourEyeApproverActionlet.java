@@ -1,24 +1,21 @@
 package com.dotmarketing.portlets.workflows.actionlet;
 
-import static com.dotmarketing.portlets.workflows.util.WorkflowActionletUtil.getApproversFromHistory;
-import static com.dotmarketing.portlets.workflows.util.WorkflowActionletUtil.getParameterValue;
-import static com.dotmarketing.portlets.workflows.util.WorkflowActionletUtil.getUsersFromIds;
-
 import com.dotcms.util.ConversionUtils;
 import com.dotmarketing.business.APILocator;
+import com.dotmarketing.business.Role;
 import com.dotmarketing.exception.DotDataException;
-import com.dotmarketing.portlets.workflows.model.MultiUserReferenceParameter;
-import com.dotmarketing.portlets.workflows.model.WorkflowActionClassParameter;
-import com.dotmarketing.portlets.workflows.model.WorkflowActionletParameter;
-import com.dotmarketing.portlets.workflows.model.WorkflowHistory;
-import com.dotmarketing.portlets.workflows.model.WorkflowProcessor;
+import com.dotmarketing.portlets.workflows.model.*;
 import com.dotmarketing.portlets.workflows.util.WorkflowEmailUtil;
 import com.dotmarketing.util.Logger;
 import com.liferay.portal.model.User;
+import io.vavr.Tuple2;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+
+import static com.dotmarketing.portlets.workflows.util.WorkflowActionletUtil.*;
 
 /**
  * Sometimes, customers would like content to be published if a specific number of people approve
@@ -119,14 +116,17 @@ public class FourEyeApproverActionlet extends WorkFlowActionlet {
     @Override
     public void executeAction(final WorkflowProcessor processor,
             final Map<String, WorkflowActionClassParameter> params) {
+
         final String userIds = getParameterValue(params.get(PARAM_CONTENT_APPROVERS));
         final int minimumContentApprovers = ConversionUtils
                 .toInt(getParameterValue(params.get(PARAM_MINIMUM_CONTENT_APPROVERS)),
                         DEFAULT_MINIMUM_CONTENT_APPROVERS);
         final String emailSubject = getParameterValue(params.get(PARAM_EMAIL_SUBJECT));
-        final String emailBody = getParameterValue(params.get(PARAM_EMAIL_BODY));
-        final boolean isHtml = getParameterValue(params.get(PARAM_IS_HTML), true);
-        final Set<User> requiredContentApprovers = getUsersFromIds(userIds, ID_DELIMITER);
+        final String emailBody    = getParameterValue(params.get(PARAM_EMAIL_BODY));
+        final boolean isHtml      = getParameterValue(params.get(PARAM_IS_HTML), true);
+        final Tuple2<Set<User>, Set<Role>> usersAndRoles = getUsersFromIds(userIds, ID_DELIMITER);
+        final Set<Role> approverRoles            = usersAndRoles._2();
+        final Set<User> requiredContentApprovers = usersAndRoles._1();
         // Add this approval to the history
         final WorkflowHistory history = new WorkflowHistory();
         history.setActionId(processor.getAction().getId());
@@ -146,6 +146,15 @@ public class FourEyeApproverActionlet extends WorkFlowActionlet {
             // email ONLY to the users who have NOT approved
             final List<String> emails = new ArrayList<>();
             boolean setNextAssign = Boolean.TRUE;
+
+            for (final Role role : approverRoles) {
+                if (setNextAssign) {
+                    processor.setNextAssign(role);
+                    setNextAssign = Boolean.FALSE;
+                    break;
+                }
+            }
+
             for (final User user : requiredContentApprovers) {
                 if (!hasApproved.contains(user)) {
                     emails.add(user.getEmailAddress());
@@ -161,11 +170,14 @@ public class FourEyeApproverActionlet extends WorkFlowActionlet {
                     }
                 }
             }
+
             final String[] emailsToSend = emails.toArray(new String[emails.size()]);
             processor.setWorkflowMessage(emailSubject);
             // Sending notification message
             WorkflowEmailUtil.sendWorkflowEmail(processor, emailsToSend, emailSubject, emailBody, isHtml);
         }
+
+        processor.getContextMap().put("type", WorkflowHistoryType.APPROVAL);
     }
 
 }

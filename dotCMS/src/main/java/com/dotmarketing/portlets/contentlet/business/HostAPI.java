@@ -125,6 +125,14 @@ public interface HostAPI {
 	public List<Host> findAllFromDB(User user, boolean respectFrontendRoles) throws DotDataException, DotSecurityException;
 
 	/**
+	 *
+	 * @param user
+	 * @param respectFrontendRoles
+	 * @return
+	 */
+	public List<Host> findAllFromCache(final User user, final boolean respectFrontendRoles) throws DotDataException, DotSecurityException;
+
+	/**
 	 * Saves the host into the system
 	 */
 	public Host save(Host host, User user, boolean respectFrontendRoles) throws DotDataException, DotSecurityException;
@@ -279,7 +287,8 @@ public interface HostAPI {
 	/**
 	 * This method takes a server name (from a web request) and maps it to a host.
 	 * It is designed to do a lightweight cache lookup to get the mapping from server name -> host
-	 * and to prevent unnecessary lucene lookups
+	 * and to prevent unnecessary lucene lookups.
+	 * If does not exists a host with that serverName then the default host is returned.
 	 * @param serverName
 	 * @param user
 	 * @param respectFrontendRoles
@@ -288,6 +297,21 @@ public interface HostAPI {
 	 * @throws DotSecurityException
 	 */
 	public Host resolveHostName(String serverName, User user, boolean respectFrontendRoles) throws DotDataException, DotSecurityException ;
+
+	/**
+	 * This method takes a server name (from a web request) and maps it to a host.
+	 * It is designed to do a lightweight cache lookup to get the mapping from server name -> host
+	 * and to prevent unnecessary lucene lookups.
+	 * If does not exists a host with that serverName then null is returned
+	 * @param serverName
+	 * @param user
+	 * @param respectFrontendRoles
+	 * @return
+	 * @throws DotDataException
+	 * @throws DotSecurityException
+	 */
+	public Optional<Host> resolveHostNameWithoutDefault(String serverName, User user, boolean respectFrontendRoles) throws DotDataException, DotSecurityException ;
+
 
 	/**
 	 * Retrieves the subset of all hosts in the system

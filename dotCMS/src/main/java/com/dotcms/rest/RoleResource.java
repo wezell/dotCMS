@@ -17,7 +17,6 @@ import com.dotmarketing.util.UtilMethods;
 import com.dotmarketing.util.json.JSONArray;
 import com.dotmarketing.util.json.JSONException;
 import com.dotmarketing.util.json.JSONObject;
-
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.util.LinkedHashMap;
@@ -66,8 +65,13 @@ public class RoleResource {
 	public Response loadChildren(@Context HttpServletRequest request, @Context final HttpServletResponse response, @PathParam("params") String params)
 			throws DotDataException, JSONException {
 
-
-        InitDataObject initData = webResource.init(params, request, response, true, null);
+		final InitDataObject initData = new WebResource.InitBuilder(webResource)
+				.requiredBackendUser(true)
+				.requiredFrontendUser(false)
+				.params(params)
+				.requestAndResponse(request, response)
+				.rejectWhenNoUser(true)
+				.init();
 
         //Creating an utility response object
         ResourceResponse responseResource = new ResourceResponse( initData.getParamsMap() );
@@ -170,7 +174,14 @@ public class RoleResource {
 	@Path("/loadbyid/{params:.*}")
 	@Produces("application/json")
 	public Response loadById(@Context HttpServletRequest request, @Context final HttpServletResponse response, @PathParam("params") String params) throws DotDataException, JSONException {
-        InitDataObject initData = webResource.init(params, request, response, true, null);
+
+		final InitDataObject initData = new WebResource.InitBuilder(webResource)
+				.requiredBackendUser(true)
+				.requiredFrontendUser(false)
+				.params(params)
+				.requestAndResponse(request, response)
+				.rejectWhenNoUser(true)
+				.init();
 
         //Creating an utility response object
         ResourceResponse responseResource = new ResourceResponse( initData.getParamsMap() );
@@ -228,13 +239,19 @@ public class RoleResource {
 	 * @throws DotDataException
 	 * @throws JSONException
 	 */
-
 	@GET
 	@Path("/loadbyname/{params:.*}")
 	@Produces("application/json")
 	@SuppressWarnings("unchecked")
 	public Response loadByName(@Context HttpServletRequest request, @Context final HttpServletResponse response, @PathParam("params") String params) throws DotDataException, JSONException {
-        InitDataObject initData = webResource.init(params, request, response, true, null);
+
+		final InitDataObject initData = new WebResource.InitBuilder(webResource)
+				.requiredBackendUser(true)
+				.requiredFrontendUser(false)
+				.params(params)
+				.requestAndResponse(request, response)
+				.rejectWhenNoUser(true)
+				.init();
 
         //Creating an utility response object
         ResourceResponse responseResource = new ResourceResponse( initData.getParamsMap() );
@@ -346,5 +363,7 @@ public class RoleResource {
 		}
 		return jsonChildren;
 	}
+
+
 
 }

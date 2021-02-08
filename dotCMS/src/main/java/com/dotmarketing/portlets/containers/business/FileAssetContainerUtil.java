@@ -1,38 +1,52 @@
 package com.dotmarketing.portlets.containers.business;
 
+import static com.dotmarketing.util.Constants.CONTAINER_FOLDER_PATH;
+import static com.dotmarketing.util.StringUtils.builder;
+import static com.liferay.util.StringPool.FORWARD_SLASH;
+
 import com.dotcms.api.vtl.model.DotJSON;
+import com.dotcms.api.web.HttpServletRequestThreadLocal;
 import com.dotcms.contenttype.exception.NotFoundInDbException;
 import com.dotcms.rendering.velocity.util.VelocityUtil;
-import com.google.common.collect.ImmutableList;
 import com.dotcms.util.ConversionUtils;
 import com.dotmarketing.beans.Host;
 import com.dotmarketing.beans.Identifier;
 import com.dotmarketing.beans.Source;
 import com.dotmarketing.business.APILocator;
+import com.dotmarketing.business.web.WebAPILocator;
 import com.dotmarketing.exception.DotDataException;
+import com.dotmarketing.exception.DotRuntimeException;
 import com.dotmarketing.exception.DotSecurityException;
 import com.dotmarketing.portlets.containers.model.Container;
 import com.dotmarketing.portlets.containers.model.FileAssetContainer;
+import com.dotmarketing.portlets.contentlet.model.Contentlet;
 import com.dotmarketing.portlets.fileassets.business.FileAsset;
 import com.dotmarketing.portlets.folders.model.Folder;
-import com.dotmarketing.util.*;
+import com.dotmarketing.util.Constants;
+import com.dotmarketing.util.Logger;
+import com.dotmarketing.util.PageMode;
+import com.dotmarketing.util.UUIDUtil;
+import com.dotmarketing.util.UtilMethods;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
+import com.liferay.portal.PortalException;
+import com.liferay.portal.SystemException;
 import com.liferay.util.StringPool;
-import java.io.InputStream;
-import org.apache.commons.io.IOUtils;
-import org.apache.velocity.VelocityContext;
-import org.apache.velocity.context.Context;
-import org.apache.velocity.exception.ParseErrorException;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.StringWriter;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
-import static com.dotmarketing.util.StringUtils.builder;
-import static com.liferay.util.StringPool.FORWARD_SLASH;
+import org.apache.commons.io.IOUtils;
+import org.apache.velocity.VelocityContext;
+import org.apache.velocity.context.Context;
+import org.apache.velocity.exception.ParseErrorException;
 
 /**
  * This util is in charge of handling the creation of the FileAsset containers based on the folder and their contains.
@@ -104,24 +118,45 @@ public class FileAssetContainerUtil {
     }
 
     public Host getHost (final String path) throws DotSecurityException, DotDataException {
-
         return this.getHostFromHostname(this.getHostName(path));
     }
 
     public Host getHostFromHostname (final String hostname) throws DotSecurityException, DotDataException {
-
         return null == hostname?
-                APILocator.getHostAPI().resolveHostName(hostname, APILocator.systemUser(), false):
-                APILocator.getHostAPI().findDefaultHost(APILocator.systemUser(), false);
+                APILocator.getHostAPI().findDefaultHost(APILocator.systemUser(), false) :
+                APILocator.getHostAPI().resolveHostName(hostname, APILocator.systemUser(), false);
     }
 
+    final List<String> pageModePrefixList = Stream.of(PageMode.values())
+                    .map(pageMode -> String.format("/%s/", pageMode.name()))
+                    .collect(Collectors.toList());
+    
+    
     //demo.dotcms.com/application/containers/test/
-    public String getHostName (final String path) {
+    public String getHostName(final String path) {
+        try {
+            String tmp = path;
 
-        final int startsHost = null != path?     path.indexOf(HOST_INDICATOR): -1;
-        final int endsHost   = -1 != startsHost? path.indexOf(FORWARD_SLASH, startsHost+HOST_INDICATOR.length()): -1;
-        return startsHost != -1 && endsHost != -1?
-                path.substring(startsHost+HOST_INDICATOR.length(), endsHost): null;
+            for (final String prefix : pageModePrefixList) {
+                if (tmp.startsWith(prefix)) {
+                    tmp = tmp.substring(prefix.length());
+                    break;
+                }
+            }
+
+            tmp = tmp.replaceAll(HOST_INDICATOR, "");
+            tmp = tmp.substring(0, tmp.indexOf(CONTAINER_FOLDER_PATH));
+            final String finalString = tmp;
+            Logger.debug(FileAssetContainerUtil.class,
+                    () -> String.format(" extracted hostName `%s`", finalString));
+
+            return (UtilMethods.isSet(tmp) ? tmp : null);
+        } catch (Exception e) {
+            Logger.error(FileAssetContainer.class, String.format(
+                    "An error occurred while extracting host name from path `%s` defaulting to systemHost ",
+                    path), e);
+            return null;
+        }
     }
 
     public String getContainerIdFromPath(final String fullPath) throws DotDataException {
@@ -140,10 +175,18 @@ public class FileAssetContainerUtil {
         if (null == host) {
 
             try {
-                host = APILocator.getHostAPI().findDefaultHost(APILocator.systemUser(), false);
-            } catch (DotDataException | DotSecurityException e) {
-                host = APILocator.systemHost();
+                host = WebAPILocator.getHostWebAPI()
+                        .getCurrentHost(HttpServletRequestThreadLocal.INSTANCE.getRequest());
+            } catch (DotSecurityException | PortalException | SystemException e) {
+                Logger.warnAndDebug(FileAssetContainerUtil.class, e);
+                try {
+                    host = APILocator.getHostAPI().findDefaultHost(APILocator.systemUser(), false);
+                } catch (DotDataException | DotSecurityException ex) {
+                    Logger.warnAndDebug(FileAssetContainerUtil.class, e);
+                    host = APILocator.systemHost();
+                }
             }
+
         }
 
         if (null == hostname) {
@@ -158,16 +201,35 @@ public class FileAssetContainerUtil {
         return identifier.getId();
     }
 
-    private String getPathFromFullPath(final String hostname, final String fullPath) {
+    /**
+     * Remove the hostname from the fullPath (if it has the host) (must be not null)
+     * @param hostname {@link String} host name to remove (must be not null)
+     * @param fullPath {@link String} full path, could be relative or full (if full, the host will be removed)
+     * @return returns the relative path
+     */
+    public String getPathFromFullPath(final String hostname, final String fullPath) {
 
         final int indexOf = fullPath.indexOf(hostname);
 
         return -1 != indexOf? fullPath.substring(indexOf + hostname.length()): fullPath;
     }
 
+    public String getRelativePath(final String path) {
+        final String hostName = this.getHostName(path);
+        return this.getPathFromFullPath(hostName, path);
+    }
+
+    /**
+     * Return true if path is a Container full path, otherwise return false
+     * @return
+     */
+    public boolean isFullPath(final String path) {
+        return path != null && path.startsWith(HOST_INDICATOR);
+    }
+
     public boolean isFolderAssetContainerId(final String containerPath) {
 
-        return UtilMethods.isSet(containerPath) && containerPath.contains(Constants.CONTAINER_FOLDER_PATH);
+        return UtilMethods.isSet(containerPath) && containerPath.contains(CONTAINER_FOLDER_PATH);
     }
 
     /**
@@ -233,12 +295,12 @@ public class FileAssetContainerUtil {
         if (null == metaInfoFileAsset) {
 
             throw new NotFoundInDbException("On getting the container by folder, the folder: " + containerFolder.getPath() +
-                    " is not valid, it must be under: " + Constants.CONTAINER_FOLDER_PATH + " and must have a child file asset called: " +
-                    Constants.CONTAINER_META_INFO_FILE_NAME);
+                    " is not valid, it must be under: " + CONTAINER_FOLDER_PATH + " and must have a child file asset called: " +
+                    Constants.CONTAINER_META_INFO_FILE_NAME + " and one or more vtl assets to backup the supported contents." );
         }
 
         this.setContainerData(host, containerFolder, metaInfoFileAsset, containerStructures.build(), container,
-                preLoop, postLoop, preLoopAsset, postLoopAsset, containerMetaInfo.get(), includeHostOnPath, codeScript);
+                preLoop, postLoop, preLoopAsset, postLoopAsset, containerMetaInfo.get(), codeScript);
 
         return container;
     }
@@ -265,8 +327,9 @@ public class FileAssetContainerUtil {
         try {
 
             final Host host = APILocator.getHostAPI().find(fileAsset.getHost(), APILocator.systemUser(), false);
-
-            return "#dotParse(\"//" + host.getHostname()  + fileAsset.getPath() + fileAsset.getFileName() + "\")";
+            String  dotParseFilePath = "//" + host.getHostname()  + fileAsset.getPath() + fileAsset.getFileName()  ;
+            Logger.debug(FileAssetContainerUtil.class,()->"dotParse directive file uri: " + dotParseFilePath);
+            return String.format("#dotParse(\"%s\")",dotParseFilePath);
 
         } catch (DotSecurityException | DotDataException  e) {
             return StringPool.BLANK;
@@ -283,7 +346,6 @@ public class FileAssetContainerUtil {
                                   final Optional<FileAsset> preLoopAsset,
                                   final Optional<FileAsset> postLoopAsset,
                                   final String containerMetaInfo,
-                                  final boolean includeHostOnPath,
                                   final Optional<String> codeScript) {
 
         container.setIdentifier (metaInfoFileAsset.getIdentifier());
@@ -298,7 +360,8 @@ public class FileAssetContainerUtil {
         container.setMaxContentlets(DEFAULT_MAX_CONTENTLETS);
         container.setLanguage(metaInfoFileAsset.getLanguageId());
         container.setFriendlyName((String)metaInfoFileAsset.getMap().getOrDefault(DESCRIPTION, container.getTitle()));
-        container.setPath(this.buildPath(host, containerFolder, includeHostOnPath));
+        container.setPath(this.buildPath(host, containerFolder, false));
+        container.setHost(host);
 
         preLoop.ifPresent (value -> container.setPreLoop (value));
         postLoop.ifPresent(value -> container.setPostLoop(value));
@@ -413,4 +476,60 @@ public class FileAssetContainerUtil {
     }
 
 
+    public boolean isFileAssetContainer(final Container container) {
+        return container instanceof  FileAssetContainer;
+    }
+
+    public boolean isFileAssetContainer(final Contentlet contentlet) {
+        if (null == contentlet || !contentlet.isFileAsset()) {
+            return false;
+        }
+        try {
+            final FileAsset asset = APILocator.getFileAssetAPI().fromContentlet(contentlet);
+            final Folder parentFolder = APILocator.getFolderAPI()
+                    .find(asset.getFolder(), APILocator.systemUser(), false);
+
+            return (CONTAINER_META_INFO.equals(asset.getFileName()) && UtilMethods
+                    .isSet(parentFolder.getPath()) && parentFolder.getPath()
+                    .startsWith(CONTAINER_FOLDER_PATH));
+        } catch (Exception e) {
+            Logger.error(FileAssetContainerUtil.class, "Unable to determine if contentlet is a fileAssetContainer ", e);
+        }
+        return false;
+    }
+
+    /**
+     * Return the full path for a {@link FileAssetContainer}, with the follow sintax:
+     *
+     * //[host name]/[File Container path]
+     *
+     * @param container
+     * @return
+     * @throws DotSecurityException
+     * @throws DotDataException
+     */
+    public String getFullPath(final FileAssetContainer container) {
+        return getFullPath(container.getHost(), container.getPath());
+    }
+
+    public String getFullPath(final String containerPath) {
+        try {
+            if (isFullPath(containerPath)) {
+                return containerPath;
+            } else {
+                final Host currentHost = WebAPILocator.getHostWebAPI().getCurrentHost();
+                return getFullPath(currentHost, containerPath);
+            }
+        } catch (DotDataException | DotSecurityException e) {
+            throw new DotRuntimeException(e);
+        }
+    }
+
+    public String getFullPath(final Host host, final String containerPath) {
+        return getFullPath(host.getHostname(), containerPath);
+    }
+
+    public String getFullPath(final String hostName, final String containerPath) {
+        return builder(HOST_INDICATOR, hostName, containerPath).toString();
+    }
 }

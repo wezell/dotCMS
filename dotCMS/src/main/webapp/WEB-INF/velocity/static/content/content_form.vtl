@@ -1,0 +1,13 @@
+#set($hasForm = true)
+## random form id for js
+
+#set($formDOM = "form_" + $date.getSystemDate().getTime())
+#set($structure = $structures.findStructure($formId))
+
+<script type="module" src="/dotcms-webcomponents/dotcms-webcomponents.esm.js"></script>
+<script nomodule="" src="/dotcms-webcomponents/dotcms-webcomponents.js"></script>
+
+<dot-form id="$formDOM" variable='$structure.velocityVarName'></dot-form>
+ <script type="text/javascript">
+     document.getElementById('$formDOM').layout = $structures.getLayoutAsJson($formId);
+ </script>

@@ -30,6 +30,8 @@ import com.dotcms.repackage.javax.portlet.ActionRequest;
 import com.dotcms.repackage.javax.portlet.ActionResponse;
 import com.dotcms.repackage.javax.portlet.PortletConfig;
 import com.dotcms.repackage.javax.portlet.WindowState;
+import com.dotcms.repackage.org.apache.struts.action.ActionForm;
+import com.dotcms.repackage.org.apache.struts.action.ActionMapping;
 import com.dotmarketing.beans.Identifier;
 import com.dotmarketing.beans.MultiTree;
 import com.dotmarketing.beans.WebAsset;
@@ -41,7 +43,6 @@ import com.dotmarketing.exception.DotDataException;
 import com.dotmarketing.exception.DotRuntimeException;
 import com.dotmarketing.exception.DotSecurityException;
 import com.dotmarketing.factories.InodeFactory;
-import com.dotmarketing.factories.MultiTreeFactory;
 import com.dotmarketing.factories.WebAssetFactory;
 import com.dotmarketing.portal.struts.DotPortletAction;
 import com.dotmarketing.portlets.containers.model.Container;
@@ -69,10 +70,9 @@ import java.net.URLDecoder;
 import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.Optional;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpSession;
-import org.apache.struts.action.ActionForm;
-import org.apache.struts.action.ActionMapping;
 
 public class DirectorAction extends DotPortletAction {
 
@@ -335,7 +335,8 @@ public class DirectorAction extends DotPortletAction {
 				    workingTemplate = APILocator.getTemplateAPI().findWorkingTemplate(
 				            htmlPage.getTemplateId(),user,false);
 				} else if (req.getParameter("template")!=null) {
-					workingTemplate = (Template) InodeFactory.getInode(req.getParameter("template"), Template.class);
+					workingTemplate = APILocator.getTemplateAPI().findWorkingTemplate(
+							req.getParameter("template"),user,false);
 				}
 
 				if ("unlockTemplate".equals(subcmd)) {
@@ -507,12 +508,12 @@ public class DirectorAction extends DotPortletAction {
 	                    	
 	                    }
 	                    if(!duplicateContentCheck){
-	                        ContentletVersionInfo versionInfo = APILocator
+	                        Optional<ContentletVersionInfo> versionInfo = APILocator
 	                                .getVersionableAPI()
 	                                .getContentletVersionInfo(
 	                                        htmlPage.getIdentifier(),
 	                                        contentlet.getLanguageId());
-	                        if (versionInfo != null) {
+	                        if (versionInfo.isPresent()) {
 	                            APILocator.getMultiTreeAPI().saveMultiTree(mTree);
 	                        } else {
 	                            // The language in the page and the 

@@ -238,7 +238,7 @@ CREATE TABLE QRTZ_JOB_DETAILS
     IS_VOLATILE tinyint(1) NOT NULL,
     IS_STATEFUL tinyint(1) NOT NULL,
     REQUESTS_RECOVERY tinyint(1) NOT NULL,
-    JOB_DATA BLOB NULL,
+    JOB_DATA LONGBLOB NULL,
     PRIMARY KEY (JOB_NAME,JOB_GROUP)
 );
 
@@ -269,7 +269,7 @@ CREATE TABLE QRTZ_TRIGGERS
     END_TIME BIGINT(13) NULL,
     CALENDAR_NAME VARCHAR(80) NULL,
     MISFIRE_INSTR SMALLINT(2) NULL,
-    JOB_DATA BLOB NULL,
+    JOB_DATA LONGBLOB NULL,
     PRIMARY KEY (TRIGGER_NAME,TRIGGER_GROUP),
     FOREIGN KEY (JOB_NAME,JOB_GROUP)
         REFERENCES QRTZ_JOB_DETAILS(JOB_NAME,JOB_GROUP)
@@ -382,7 +382,7 @@ CREATE TABLE QRTZ_EXCL_JOB_DETAILS
     IS_VOLATILE tinyint(1) NOT NULL,
     IS_STATEFUL tinyint(1) NOT NULL,
     REQUESTS_RECOVERY tinyint(1) NOT NULL,
-    JOB_DATA BLOB NULL,
+    JOB_DATA LONGBLOB NULL,
     PRIMARY KEY (JOB_NAME,JOB_GROUP)
 );
 
@@ -413,7 +413,7 @@ CREATE TABLE QRTZ_EXCL_TRIGGERS
     END_TIME BIGINT(13) NULL,
     CALENDAR_NAME VARCHAR(80) NULL,
     MISFIRE_INSTR SMALLINT(2) NULL,
-    JOB_DATA BLOB NULL,
+    JOB_DATA LONGBLOB NULL,
     PRIMARY KEY (TRIGGER_NAME,TRIGGER_GROUP),
     FOREIGN KEY (JOB_NAME,JOB_GROUP)
         REFERENCES QRTZ_EXCL_JOB_DETAILS(JOB_NAME,JOB_GROUP)
@@ -1038,6 +1038,9 @@ create table identifier (
    syspublish_date datetime,
    sysexpire_date datetime,
    full_path_lc varchar(510) as ( IF(parent_path = 'System folder', '/', lower(concat(parent_path, asset_name)) )),
+   owner varchar(255),
+   create_date datetime,
+   asset_subtype varchar(255),
    primary key (id),
    unique (parent_path, asset_name, host_inode)
 );
@@ -1086,6 +1089,34 @@ create table workflow_task (
    language_id bigint,
    primary key (id)
 );
+
+create table workflow_action_mappings (
+   id varchar(36) not null,
+   action varchar(36) not null,
+   workflow_action varchar(255) not null,
+   scheme_or_content_type  varchar(255) not null,
+   primary key (id)
+);
+
+CREATE UNIQUE INDEX idx_workflow_action_mappings ON workflow_action_mappings (action, workflow_action, scheme_or_content_type);
+
+insert into workflow_action_mappings(id, action, workflow_action, scheme_or_content_type)
+values ('3d6be719-6b61-4ef8-a594-a9764e461597','NEW'      ,'ceca71a0-deee-4999-bd47-b01baa1bcfc8','d61a59e1-a49c-46f2-a929-db2b4bfa88b2');
+insert into workflow_action_mappings(id, action, workflow_action, scheme_or_content_type)
+values ('63865890-c863-43a1-ab61-4b495dba5eb5','EDIT'     ,'ceca71a0-deee-4999-bd47-b01baa1bcfc8','d61a59e1-a49c-46f2-a929-db2b4bfa88b2');
+insert into workflow_action_mappings(id, action, workflow_action, scheme_or_content_type)
+values ('2016a72e-85c7-4ee0-936f-36ce52df355e','PUBLISH'  ,'000ec468-0a63-4283-beb7-fcb36c107b2f','d61a59e1-a49c-46f2-a929-db2b4bfa88b2');
+insert into workflow_action_mappings(id, action, workflow_action, scheme_or_content_type)
+values ('3ec446c8-a9b6-47fe-830f-1e623493090c','UNPUBLISH','38efc763-d78f-4e4b-b092-59cd8c579b93','d61a59e1-a49c-46f2-a929-db2b4bfa88b2');
+insert into workflow_action_mappings(id, action, workflow_action, scheme_or_content_type)
+values ('e7b8c8a3-e605-473c-8680-6d95cac15c9b','ARCHIVE'  ,'4da13a42-5d59-480c-ad8f-94a3adf809fe','d61a59e1-a49c-46f2-a929-db2b4bfa88b2');
+insert into workflow_action_mappings(id, action, workflow_action, scheme_or_content_type)
+values ('99019118-df2c-4297-a5aa-2fe3fe0f52ce','UNARCHIVE','c92f9aa1-9503-4567-ac30-d3242b54d02d','d61a59e1-a49c-46f2-a929-db2b4bfa88b2');
+insert into workflow_action_mappings(id, action, workflow_action, scheme_or_content_type)
+values ('d073436e-3c10-4e4c-8c97-225e9cddf320','DELETE'   ,'777f1c6b-c877-4a37-ba4b-10627316c2cc','d61a59e1-a49c-46f2-a929-db2b4bfa88b2');
+insert into workflow_action_mappings(id, action, workflow_action, scheme_or_content_type)
+values ('3d73437e-3f1c-8e5c-ac97-a25e9cddf320','DESTROY'  ,'1e0f1c6b-b67f-4c99-983d-db2b4bfa88b2','d61a59e1-a49c-46f2-a929-db2b4bfa88b2');
+
 create table tag_inode (
    tag_id varchar(100) not null,
    inode varchar(100) not null,
@@ -1541,6 +1572,7 @@ alter table analytic_summary_visits add index fk9eac9733b7b46300 (summary_period
 create index idx_preference_1 on user_preferences (preference);
 create index idx_identifier_pub on identifier (syspublish_date);
 create index idx_identifier_exp on identifier (sysexpire_date);
+create index idx_identifier_asset_subtype on identifier (asset_subtype);
 create index idx_user_clickstream11 on clickstream (host_id);
 create index idx_user_clickstream12 on clickstream (last_page_id);
 create index idx_user_clickstream15 on clickstream (browser_name);
@@ -1726,44 +1758,6 @@ alter table structure add constraint fk_structure_folder foreign key (folder) re
 alter table structure modify column velocity_var_name varchar(255) not null;
 alter table structure add constraint unique_struct_vel_var_name unique (velocity_var_name);
 
-DROP PROCEDURE IF EXISTS load_records_to_index;
-CREATE PROCEDURE load_records_to_index(IN server_id VARCHAR(100), IN records_to_fetch INT, IN priority_level INT)
-BEGIN
-DECLARE v_id BIGINT;
-DECLARE v_inode_to_index VARCHAR(100);
-DECLARE v_ident_to_index VARCHAR(100);
-DECLARE v_serverid VARCHAR(64);
-DECLARE v_priority INT;
-DECLARE v_time_entered TIMESTAMP;
-DECLARE v_index_val VARCHAR(325);
-DECLARE v_dist_action INT;
-DECLARE cursor_end BOOL DEFAULT FALSE;
-DECLARE cur1 CURSOR FOR SELECT * FROM dist_reindex_journal WHERE serverid IS NULL or serverid='' AND priority <= priority_level ORDER BY priority ASC LIMIT records_to_fetch;
-DECLARE CONTINUE HANDLER FOR NOT FOUND SET cursor_end:=TRUE;
-
-DROP TEMPORARY TABLE IF EXISTS tmp_records_reindex;
-CREATE TEMPORARY TABLE tmp_records_reindex (
-  id BIGINT PRIMARY KEY,
-  inode_to_index varchar(36),
-  ident_to_index varchar(36),
-  dist_action INT,
-  priority INT
-) ENGINE=MEMORY;
-
-OPEN cur1;
-WHILE (NOT cursor_end) DO
-  FETCH cur1 INTO v_id,v_inode_to_index,v_ident_to_index,v_serverid,v_priority,v_time_entered,v_index_val,v_dist_action;
-  IF (NOT cursor_end) THEN
-    UPDATE dist_reindex_journal SET serverid=server_id WHERE id=v_id;
-    INSERT INTO tmp_records_reindex VALUES (v_id, v_inode_to_index, v_ident_to_index, v_dist_action, v_priority);
-  END IF;
-END WHILE;
-CLOSE cur1;
-
-SELECT * FROM tmp_records_reindex;
-
-END;
-#
 DROP TRIGGER IF EXISTS check_parent_path_when_update;
 CREATE TRIGGER check_parent_path_when_update  BEFORE UPDATE
 on identifier
@@ -2093,8 +2087,9 @@ delete from workflow_task;
 
 ALTER TABLE workflow_task ADD CONSTRAINT FK_workflow_task_language FOREIGN KEY (language_id) REFERENCES language(id);
 ALTER TABLE workflow_task ADD CONSTRAINT FK_workflow_assign FOREIGN KEY (assigned_to) REFERENCES cms_role (id);
-ALTER TABLE workflow_task ADD CONSTRAINT FK_workflow_task_asset FOREIGN KEY (webasset) REFERENCES identifier (id);
 ALTER TABLE workflow_task ADD CONSTRAINT FK_workflow_step FOREIGN KEY (status) REFERENCES workflow_step (id);
+ALTER TABLE workflow_task ADD CONSTRAINT unique_workflow_task unique (webasset,language_id);
+
 alter table workflow_step add constraint fk_escalation_action foreign key (escalation_action) references workflow_action(id);
 
 alter table contentlet_version_info add constraint FK_con_ver_lockedby foreign key (locked_by) references user_(userid);
@@ -2108,7 +2103,7 @@ alter table tag_inode add constraint fk_tag_inode_tagid foreign key (tag_id) ref
 
 -- ****** Indicies Data Storage *******
 create table indicies (
-  index_name varchar(30) primary key,
+  index_name varchar(100) primary key,
   index_type varchar(16) not null unique
 );
 
@@ -2205,7 +2200,9 @@ create table publishing_bundle(
 	  name varchar(255) NOT NULL,
 	  publish_date DATETIME,
 	  expire_date DATETIME,
-	  owner varchar(100)
+	  owner varchar(100),
+	  force_push tinyint(1),
+	  filter_key varchar(100)
 );
 
 ALTER TABLE publishing_bundle ADD CONSTRAINT FK_publishing_bundle_owner FOREIGN KEY (owner) REFERENCES user_(userid);
@@ -2231,12 +2228,9 @@ CREATE INDEX idx_pushed_assets_3 ON publishing_pushed_assets (asset_id, environm
 
 CREATE INDEX idx_pub_qa_1 ON publishing_queue_audit (status);
 
-
-alter table publishing_bundle add force_push tinyint(1) ;
-
 -- Cluster Tables
 
-CREATE TABLE dot_cluster(cluster_id varchar(36), PRIMARY KEY (cluster_id) );
+CREATE TABLE dot_cluster(cluster_id varchar(36), cluster_salt VARCHAR(256), PRIMARY KEY (cluster_id) );
 CREATE TABLE cluster_server(server_id varchar(36), cluster_id varchar(36) NOT NULL, name varchar(100), ip_address varchar(39) NOT NULL, host varchar(255), cache_port SMALLINT, es_transport_tcp_port SMALLINT, es_network_port SMALLINT, es_http_port SMALLINT, key_ varchar(100), PRIMARY KEY (server_id) );
 ALTER TABLE cluster_server add constraint fk_cluster_id foreign key (cluster_id) REFERENCES dot_cluster(cluster_id);
 CREATE TABLE cluster_server_uptime(id varchar(36),server_id varchar(36) NOT NULL, startup datetime, heartbeat datetime, PRIMARY KEY (id)) ;
@@ -2269,22 +2263,15 @@ alter table container_structures add constraint FK_cs_container_id foreign key (
 alter table container_structures add constraint FK_cs_inode foreign key (container_inode) references inode(inode);
 
 -- license repo
-create table sitelic(id varchar(36) primary key, serverid varchar(100), license longtext not null, lastping datetime not null);
+create table sitelic(id varchar(36) primary key, serverid varchar(100), license longtext not null, lastping datetime not null, startup_time bigint);
 
 -- Integrity Checker
-create table folders_ir(folder varchar(255), local_inode varchar(36), remote_inode varchar(36), local_identifier varchar(36), remote_identifier varchar(36), endpoint_id varchar(36), PRIMARY KEY (local_inode, endpoint_id));
-create table structures_ir(velocity_name varchar(255), local_inode varchar(36), remote_inode varchar(36), endpoint_id varchar(36), PRIMARY KEY (local_inode, endpoint_id));
-create table schemes_ir(name varchar(255), local_inode varchar(36), remote_inode varchar(36), endpoint_id varchar(36), PRIMARY KEY (local_inode, endpoint_id));
-create table htmlpages_ir(html_page varchar(255), local_working_inode varchar(36), local_live_inode varchar(36), remote_working_inode varchar(36), remote_live_inode varchar(36),local_identifier varchar(36), remote_identifier varchar(36), endpoint_id varchar(36), language_id bigint, PRIMARY KEY (local_working_inode, language_id, endpoint_id));
-create table fileassets_ir(file_name varchar(255), local_working_inode varchar(36), local_live_inode varchar(36), remote_working_inode varchar(36), remote_live_inode varchar(36),local_identifier varchar(36), remote_identifier varchar(36), endpoint_id varchar(36), language_id bigint, PRIMARY KEY (local_working_inode, language_id, endpoint_id));
-create table cms_roles_ir(name varchar(1000), role_key varchar(255), local_role_id varchar(36), remote_role_id varchar(36), local_role_fqn varchar(1000), remote_role_fqn varchar(1000), endpoint_id varchar(36), PRIMARY KEY (local_role_id, endpoint_id));
-
-alter table folders_ir add constraint FK_folder_ir_ep foreign key (endpoint_id) references publishing_end_point(id);
-alter table structures_ir add constraint FK_structure_ir_ep foreign key (endpoint_id) references publishing_end_point(id);
-alter table schemes_ir add constraint FK_scheme_ir_ep foreign key (endpoint_id) references publishing_end_point(id);
-alter table htmlpages_ir add constraint FK_page_ir_ep foreign key (endpoint_id) references publishing_end_point(id);
-alter table fileassets_ir add constraint FK_file_ir_ep foreign key (endpoint_id) references publishing_end_point(id);
-alter table cms_roles_ir add constraint FK_cms_roles_ir_ep foreign key (endpoint_id) references publishing_end_point(id);
+create table folders_ir(folder varchar(255), local_inode varchar(36), remote_inode varchar(36), local_identifier varchar(36), remote_identifier varchar(36), endpoint_id varchar(40), PRIMARY KEY (local_inode, endpoint_id));
+create table structures_ir(velocity_name varchar(255), local_inode varchar(36), remote_inode varchar(36), endpoint_id varchar(40), PRIMARY KEY (local_inode, endpoint_id));
+create table schemes_ir(name varchar(255), local_inode varchar(36), remote_inode varchar(36), endpoint_id varchar(40), PRIMARY KEY (local_inode, endpoint_id));
+create table htmlpages_ir(html_page varchar(255), local_working_inode varchar(36), local_live_inode varchar(36), remote_working_inode varchar(36), remote_live_inode varchar(36),local_identifier varchar(36), remote_identifier varchar(36), endpoint_id varchar(40), language_id bigint, PRIMARY KEY (local_working_inode, language_id, endpoint_id));
+create table fileassets_ir(file_name varchar(255), local_working_inode varchar(36), local_live_inode varchar(36), remote_working_inode varchar(36), remote_live_inode varchar(36),local_identifier varchar(36), remote_identifier varchar(36), endpoint_id varchar(40), language_id bigint, PRIMARY KEY (local_working_inode, language_id, endpoint_id));
+create table cms_roles_ir(name varchar(1000), role_key varchar(255), local_role_id varchar(36), remote_role_id varchar(36), local_role_fqn varchar(1000), remote_role_fqn varchar(1000), endpoint_id varchar(40), PRIMARY KEY (local_role_id, endpoint_id));
 
 ---Server Action
 create table cluster_server_action(
@@ -2338,3 +2325,37 @@ CREATE TABLE api_token_issued(
 create index idx_api_token_issued_user ON api_token_issued (token_userid);
 
 CREATE UNIQUE INDEX idx_ident_uniq_asset_name on identifier (full_path_lc,host_inode);
+
+create table storage_group (
+    group_name varchar(255)  not null,
+    mod_date   TIMESTAMP NOT NULL default CURRENT_TIMESTAMP,
+    PRIMARY KEY (group_name)
+);
+
+create table storage (
+    path       varchar(255) not null,
+    group_name varchar(255) not null,
+    hash       varchar(64) not null,
+    metadata   text not null,
+    mod_date   TIMESTAMP NOT NULL default CURRENT_TIMESTAMP,
+    PRIMARY KEY (path, group_name),
+    FOREIGN KEY (group_name) REFERENCES storage_group (group_name)
+);
+
+CREATE INDEX idx_storage_hash ON storage (hash);
+
+create table storage_data (
+    hash_id  varchar(64) not null,
+    data     MEDIUMBLOB not null,
+    mod_date TIMESTAMP NOT NULL default CURRENT_TIMESTAMP,
+    PRIMARY KEY (hash_id)
+);
+
+create table storage_x_data (
+    storage_hash varchar(64) not null,
+    data_hash    varchar(64) not null,
+    data_order   integer  not null,
+    mod_date     TIMESTAMP NOT NULL default CURRENT_TIMESTAMP,
+    PRIMARY KEY (storage_hash, data_hash),
+    FOREIGN KEY (data_hash) REFERENCES storage_data (hash_id)
+);

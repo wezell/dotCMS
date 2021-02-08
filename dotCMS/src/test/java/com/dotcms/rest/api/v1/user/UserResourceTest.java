@@ -11,11 +11,14 @@ import static org.mockito.Mockito.when;
 import com.dotcms.UnitTestBase;
 import com.dotcms.api.system.user.UserService;
 import com.dotcms.cms.login.LoginServiceAPI;
+import com.dotcms.repackage.org.apache.struts.Globals;
 import com.dotcms.rest.ErrorResponseHelper;
 import com.dotcms.rest.InitDataObject;
 import com.dotcms.rest.ResponseEntityView;
 import com.dotcms.rest.RestUtilTest;
 import com.dotcms.rest.WebResource;
+import com.dotcms.rest.WebResource.InitBuilder;
+import com.dotcms.util.UserUtilTest;
 import com.dotmarketing.business.LayoutAPI;
 import com.dotmarketing.business.PermissionAPI;
 import com.dotmarketing.business.Role;
@@ -26,6 +29,7 @@ import com.dotmarketing.business.web.HostWebAPI;
 import com.dotmarketing.business.web.UserWebAPI;
 import com.dotmarketing.exception.DotDataException;
 import com.dotmarketing.exception.DotSecurityException;
+import com.dotmarketing.portlets.contentlet.business.HostAPI;
 import com.dotmarketing.util.Config;
 import com.dotmarketing.util.json.JSONException;
 import com.liferay.portal.model.User;
@@ -39,8 +43,8 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
 import javax.ws.rs.core.Response;
-import org.apache.struts.Globals;
 import org.junit.Test;
+import org.mockito.Mockito;
 
 /**
  * {@link UserResource} test
@@ -59,19 +63,21 @@ public class UserResourceTest extends UnitTestBase {
         final InitDataObject initDataObject = mock(InitDataObject.class);
         final User user = new User();
         final UserAPI userAPI = mock(UserAPI.class);
+        final HostAPI siteAPI = mock(HostAPI.class);
         final UserResourceHelper userHelper  = mock(UserResourceHelper.class);
         final ErrorResponseHelper errorHelper  = mock(ErrorResponseHelper.class);
 
         Config.CONTEXT = context;
 
         when(initDataObject.getUser()).thenReturn(user);
+        when(webResource.init(Mockito.any(InitBuilder.class))).thenReturn(initDataObject);
         when(webResource.init(null, request, response, true, null)).thenReturn(initDataObject);
         when(context.getInitParameter("company_id")).thenReturn(RestUtilTest.DEFAULT_COMPANY);
         when(request.getSession()).thenReturn(session);
         when(request.getSession(false)).thenReturn(session);
         when(session.getAttribute(Globals.LOCALE_KEY)).thenReturn(new Locale.Builder().setLanguage("en").setRegion("US").build());
         UserResource userResource =
-                new UserResource(webResource, userAPI, userHelper, errorHelper);
+                new UserResource(webResource, userAPI, siteAPI, userHelper, errorHelper);
 
         try {
 
@@ -117,21 +123,28 @@ public class UserResourceTest extends UnitTestBase {
         final UserWebAPI userWebAPI = mock(UserWebAPI.class);
         final PermissionAPI permissionAPI= mock(PermissionAPI.class);
         final UserProxyAPI userProxyAPI= mock(UserProxyAPI.class);
+        final HostAPI siteAPI = mock(HostAPI.class);
         final LoginServiceAPI loginService= mock(LoginServiceAPI.class);
         final ErrorResponseHelper errorHelper  = mock(ErrorResponseHelper.class);
         final InitDataObject initDataObject = mock(InitDataObject.class);
 
         RestUtilTest.initMockContext();
 
-        final User user = new User();
+        User user = Mockito.mock(User.class);
+        UserUtilTest.set(user);
         user.setCompanyId(User.DEFAULT + "NO");
         user.setUserId("dotcms.org.1");
 
         final User systemUser = new User();
 
+        when(user.clone()).thenReturn(user);
+        when(user.getUserId()).thenReturn("dotcms.org.1");
         when(initDataObject.getUser()).thenReturn(user);
+        when(webResource.init(Mockito.any(InitBuilder.class))).thenReturn(initDataObject);
         when(userAPI.getSystemUser()).thenReturn(systemUser);
-        when(userAPI.loadUserById("dotcms.org.1", systemUser, false)).thenReturn(user);
+        when(userAPI
+                .loadUserById(Mockito.anyString(), Mockito.any(User.class), Mockito.anyBoolean()))
+                .thenReturn(user);
         when(webResource.init(request, httpServletResponse, true)).thenReturn(initDataObject);
         when(request.getSession()).thenReturn(session);
         when(request.getSession(false)).thenReturn(session);
@@ -142,7 +155,7 @@ public class UserResourceTest extends UnitTestBase {
                 userWebAPI, permissionAPI, userProxyAPI, loginService);
 
         UserResource userResource =
-                new UserResource(webResource, userAPI, userHelper, errorHelper);
+                new UserResource(webResource, userAPI, siteAPI, userHelper, errorHelper);
 
         UpdateUserForm updateUserForm = new UpdateUserForm.Builder()
                 .userId("dotcms.org.1")
@@ -182,6 +195,7 @@ public class UserResourceTest extends UnitTestBase {
         final PermissionAPI permissionAPI= mock(PermissionAPI.class);
         final UserProxyAPI userProxyAPI= mock(UserProxyAPI.class);
         final LoginServiceAPI loginService= mock(LoginServiceAPI.class);
+        final HostAPI siteAPI = mock(HostAPI.class);
         final ErrorResponseHelper errorHelper  = mock(ErrorResponseHelper.class);
         final InitDataObject initDataObject = mock(InitDataObject.class);
 
@@ -194,6 +208,7 @@ public class UserResourceTest extends UnitTestBase {
         final User systemUser = new User();
 
         when(initDataObject.getUser()).thenReturn(user);
+        when(webResource.init(Mockito.any(InitBuilder.class))).thenReturn(initDataObject);
         when(userAPI.getSystemUser()).thenReturn(systemUser);
         when(userAPI.loadUserById("dotcms.org.1", systemUser, false)).thenReturn(user);
         when(webResource.init(request, httpServletResponse, true)).thenReturn(initDataObject);
@@ -206,7 +221,7 @@ public class UserResourceTest extends UnitTestBase {
                 userWebAPI, permissionAPI, userProxyAPI, loginService);
 
         UserResource userResource =
-                new UserResource(webResource, userAPI, userHelper, errorHelper);
+                new UserResource(webResource, userAPI, siteAPI, userHelper, errorHelper);
 
         UpdateUserForm updateUserForm = new UpdateUserForm.Builder()
                 .userId("dotcms.org.1")
@@ -249,6 +264,7 @@ public class UserResourceTest extends UnitTestBase {
         final PermissionAPI permissionAPI= mock(PermissionAPI.class);
         final UserProxyAPI userProxyAPI= mock(UserProxyAPI.class);
         final LoginServiceAPI loginService= mock(LoginServiceAPI.class);
+        final HostAPI siteAPI = mock(HostAPI.class);
         final ErrorResponseHelper errorHelper  = mock(ErrorResponseHelper.class);
         final InitDataObject initDataObject = mock(InitDataObject.class);
 
@@ -263,7 +279,7 @@ public class UserResourceTest extends UnitTestBase {
         when(initDataObject.getUser()).thenReturn(user);
         when(userAPI.getSystemUser()).thenReturn(systemUser);
         when(userAPI.loadUserById("dotcms.org.1", systemUser, false)).thenReturn(user);
-        when(webResource.init(request, httpServletResponse,true)).thenReturn(initDataObject);
+        when(webResource.init(Mockito.any(InitBuilder.class))).thenReturn(initDataObject);
         when(request.getSession()).thenReturn(session);
         when(request.getSession(false)).thenReturn(session);
         when(session.getAttribute(Globals.LOCALE_KEY)).thenReturn(new Locale.Builder().setLanguage("en").setRegion("US").build());
@@ -273,7 +289,7 @@ public class UserResourceTest extends UnitTestBase {
                 userWebAPI, permissionAPI, userProxyAPI, loginService);
 
         UserResource userResource =
-                new UserResource(webResource, userAPI, userHelper, errorHelper);
+                new UserResource(webResource, userAPI, siteAPI, userHelper, errorHelper);
 
         UpdateUserForm updateUserForm = new UpdateUserForm.Builder()
                 .userId("dotcms.org.1")
@@ -303,6 +319,7 @@ public class UserResourceTest extends UnitTestBase {
         final UserWebAPI userWebAPI = mock(UserWebAPI.class);
         final PermissionAPI permissionAPI= mock(PermissionAPI.class);
         final UserProxyAPI userProxyAPI= mock(UserProxyAPI.class);
+        final HostAPI siteAPI = mock(HostAPI.class);
         final LoginServiceAPI loginService= mock(LoginServiceAPI.class);
         final InitDataObject initDataObject = mock(InitDataObject.class);
 
@@ -352,13 +369,14 @@ public class UserResourceTest extends UnitTestBase {
         when( roleAPI.doesUserHaveRoles(userId2, rolesId) ).thenReturn( false ) ;
         when( roleAPI.findRoleByFQN(Role.SYSTEM + " --> " + Role.LOGIN_AS) ).thenReturn( loginAsRole ) ;
         when( roleAPI.doesUserHaveRole(user3, loginAsRole) ).thenReturn( true ) ;
+        when(webResource.init(Mockito.any(InitBuilder.class))).thenReturn(initDataObject);
         when( initDataObject.getUser()).thenReturn(user3);
         when( webResource.init(null, request, httpServletResponse, true, null)).thenReturn(initDataObject);
 
 
 
         UserResource userResource =
-                new UserResource(webResource, userAPI, userHelper, errorHelper);
+                new UserResource(webResource, userAPI, siteAPI, userHelper, errorHelper);
 
         Response response = userResource
                 .loginAsData(request, httpServletResponse, userFilter, true);

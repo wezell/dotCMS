@@ -71,10 +71,18 @@ public class StringPool {
 
 	public static final String SLASH = FORWARD_SLASH;
 
+    public static final String DOUBLE_SLASH = "//";
+
 	public static final String SPACE = " ";
 
 	public static final String STAR = "*";
 
 	public static final String UNDERLINE = "_";
+
+	public static final String OPEN_PARENTHESES = "(";
+
+	public static final String CLOSE_PARENTHESES = ")";
+
+	public static final String PLUS = "+";
 
 }

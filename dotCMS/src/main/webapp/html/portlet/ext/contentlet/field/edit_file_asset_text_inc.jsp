@@ -1,4 +1,5 @@
-<%String contents =UtilMethods.htmlifyString(FileUtils.readFileToString(fa.getBinary(field.getVelocityVarName()))); %>
+<%String contents =UtilMethods.htmlifyString(FileUtils.readFileToString(contentlet.getBinary(field.getVelocityVarName()))); %>
+
 
 <style type="text/css">
     #editor {
@@ -98,7 +99,7 @@
 <%@page import="com.dotmarketing.util.UtilMethods"%>
 
 <div id="fileTextEditorDiv">
-    <div style="height:600px;width:900px;border:1px solid silver" 
+    <div style="height:600px;max-width:900px;border:1px solid silver" 
         id="<%=field.getVelocityVarName()%>_ACE"><%=contents %></div>
         <div class="editor-options">
 			<div class="checkbox">
@@ -111,5 +112,5 @@
 <input type="hidden" id="<%=field.getVelocityVarName()%>_hidden_field" value="<%=contents %>">
 
 <script>
-loadAce("<%=UtilMethods.getFileExtension(fa.getBinary(field.getVelocityVarName()).getName())%>")
+loadAce("<%=UtilMethods.getFileExtension(contentlet.getBinary(field.getVelocityVarName()).getName())%>")
 </script>

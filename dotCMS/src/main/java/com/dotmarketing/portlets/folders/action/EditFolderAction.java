@@ -6,6 +6,8 @@ import com.dotcms.repackage.javax.portlet.ActionRequest;
 import com.dotcms.repackage.javax.portlet.ActionResponse;
 import com.dotcms.repackage.javax.portlet.PortletConfig;
 import com.dotcms.repackage.javax.portlet.WindowState;
+import com.dotcms.repackage.org.apache.struts.action.ActionForm;
+import com.dotcms.repackage.org.apache.struts.action.ActionMapping;
 import com.dotmarketing.beans.Host;
 import com.dotmarketing.beans.Identifier;
 import com.dotmarketing.beans.Inode;
@@ -25,6 +27,7 @@ import com.dotmarketing.portlets.contentlet.business.HostAPI;
 import com.dotmarketing.portlets.folders.business.AddContentToFolderPermissionException;
 import com.dotmarketing.portlets.folders.business.FolderAPI;
 import com.dotmarketing.portlets.folders.business.FolderFactory;
+import com.dotmarketing.portlets.folders.exception.InvalidFolderNameException;
 import com.dotmarketing.portlets.folders.model.Folder;
 import com.dotmarketing.portlets.folders.struts.FolderForm;
 import com.dotmarketing.portlets.links.model.Link;
@@ -44,8 +47,6 @@ import java.util.Set;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpSession;
 import org.apache.commons.beanutils.BeanUtils;
-import org.apache.struts.action.ActionForm;
-import org.apache.struts.action.ActionMapping;
 
 /**
  * This Action class provides utility methods to interact with {@link Folder}
@@ -339,71 +340,57 @@ public class EditFolderAction extends DotPortletAction {
 			}
 			f.setDefaultFileType(defaultFileType);
 			
-			java.util.List<String> reservedFolderNames = new java.util.ArrayList<String>();
-			String[] reservedFolderNamesArray = Config.getStringArrayProperty("RESERVEDFOLDERNAMES");
-			for(String name:reservedFolderNamesArray){
-				reservedFolderNames.add(name.toUpperCase());
-			}
-			
-			if (parentFolder == null && reservedFolderNames.contains(f.getName().toUpperCase())) {
-				// For messages to be displayed on messages page
-				SessionMessages.add(req, "message",
-				"message.folder.save.reservedName");
-			} else {
-				if(!InodeUtils.isSet(f.getInode())) {
-					// check if the new folder already exists
-					Identifier prevId = null;
-					if (parentFolder != null) {
-						String uri=APILocator.getIdentifierAPI().find(parentFolder).getPath()+ f.getName();
-						prevId = APILocator.getIdentifierAPI().find(parentHost, uri);
-					} else {
-						String uri="/" + f.getName();
-						prevId = APILocator.getIdentifierAPI().find(parentHost, uri);
-					}
-				
-					if (InodeUtils.isSet(prevId.getInode())) {
-						// For messages to be displayed on messages page
-						SessionMessages.add(req, "error",
-						"message.named.asset.alreadyexists");
-						return false;
-					}
+			if(!InodeUtils.isSet(f.getInode())) {
+				// check if the new folder already exists
+				Identifier prevId = null;
+				if (parentFolder != null) {
+					String uri=APILocator.getIdentifierAPI().find(parentFolder).getPath()+ f.getName();
+					prevId = APILocator.getIdentifierAPI().find(parentHost, uri);
+				} else {
+					String uri="/" + f.getName();
+					prevId = APILocator.getIdentifierAPI().find(parentHost, uri);
 				}
-				boolean previousShowMenu = ((Boolean) req
-						.getAttribute(WebKeys.FOLDER_SHOWMENU)).booleanValue();
-				
-				if (parentFolder instanceof Folder){
-					if(f.getName().equalsIgnoreCase("admin")){
-							
-					SessionMessages.add(req, "message",
-					"message.folder.admin.doesnotallow");
+
+				if (InodeUtils.isSet(prevId.getInode())) {
+					// For messages to be displayed on messages page
+					SessionMessages.add(req, "error",
+					"message.named.asset.alreadyexists");
 					return false;
-					}
-				}					
-				if(!InodeUtils.isSet(f.getInode())){
-					f.setOwner(_getUser(req).getUserId());
 				}
-				
-				//set hostId to folder to persist in Identifier table.
-				f.setHostId(parentHost.getIdentifier());
-				final boolean isNew=!UtilMethods.isSet(f.getIdentifier());
-				if(isNew) {
-					Treeable parent;
-					if(UtilMethods.isSet(parentFolder))
-						parent=parentFolder;
-					else
-						parent=parentHost;
-					
-					Identifier id=APILocator.getIdentifierAPI().createNew(f, parent);
-					f.setIdentifier(id.getId());
-				}
-				
-				folderAPI.save(f,user,false);
-				CacheLocator.getIdentifierCache().removeFromCacheByIdentifier(f.getIdentifier());
-				// For messages to be displayed on messages page
-				SessionMessages.add(req, "message", "message.folder.save");
-				return true;
 			}
+
+			if (parentFolder instanceof Folder){
+				if(f.getName().equalsIgnoreCase("admin")){
+
+				SessionMessages.add(req, "message",
+				"message.folder.admin.doesnotallow");
+				return false;
+				}
+			}
+			if(!InodeUtils.isSet(f.getInode())){
+				f.setOwner(_getUser(req).getUserId());
+			}
+
+			//set hostId to folder to persist in Identifier table.
+			f.setHostId(parentHost.getIdentifier());
+			final boolean isNew=!UtilMethods.isSet(f.getIdentifier());
+			if(isNew) {
+				Treeable parent;
+				if(UtilMethods.isSet(parentFolder))
+					parent=parentFolder;
+				else
+					parent=parentHost;
+
+				Identifier id=APILocator.getIdentifierAPI().createNew(f, parent);
+				f.setIdentifier(id.getId());
+			}
+
+			folderAPI.save(f,user,false);
+			CacheLocator.getIdentifierCache().removeFromCacheByIdentifier(f.getIdentifier());
+			// For messages to be displayed on messages page
+			SessionMessages.add(req, "message", "message.folder.save");
 			HibernateUtil.closeAndCommitTransaction();
+			return true;
 		}catch(AddContentToFolderPermissionException e){
 			HibernateUtil.rollbackTransaction();
 			String message = LanguageUtil.format(user.getLocale(),
@@ -411,6 +398,11 @@ public class EditFolderAction extends DotPortletAction {
 			SessionMessages.add(req, "message", message);
 			Logger.error(this, e.getMessage(), e);
 			throw e;
+		} catch(InvalidFolderNameException e ) {
+			HibernateUtil.rollbackTransaction();
+			SessionMessages.add(req, "message", "message.folder.save.reservedName");
+			Logger.error(this,
+					"ERROR: Cannot save folder '" + parentPath + folderForm.getName());
 		} catch(Exception ex) {
 			HibernateUtil.rollbackTransaction();
 			SessionMessages.add(req, "message", "message.folder.save.error");

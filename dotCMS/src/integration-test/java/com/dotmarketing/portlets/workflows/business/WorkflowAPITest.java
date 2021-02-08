@@ -10,6 +10,7 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import com.dotcms.IntegrationTestBase;
+import com.dotcms.content.elasticsearch.business.event.ContentletCheckinEvent;
 import com.dotcms.contenttype.business.ContentTypeAPIImpl;
 import com.dotcms.contenttype.business.FieldAPI;
 import com.dotcms.contenttype.model.field.Field;
@@ -18,7 +19,15 @@ import com.dotcms.contenttype.model.type.BaseContentType;
 import com.dotcms.contenttype.model.type.ContentType;
 import com.dotcms.contenttype.model.type.ContentTypeBuilder;
 import com.dotcms.contenttype.transform.contenttype.StructureTransformer;
+import com.dotcms.datagen.ContentTypeDataGen;
+import com.dotcms.datagen.ContentletDataGen;
+import com.dotcms.datagen.FieldDataGen;
+import com.dotcms.datagen.LanguageDataGen;
+import com.dotcms.datagen.TestDataUtils;
 import com.dotcms.datagen.TestUserUtils;
+import com.dotcms.datagen.TestWorkflowUtils;
+import com.dotcms.system.event.local.model.EventSubscriber;
+import com.dotcms.util.CollectionsUtils;
 import com.dotcms.util.IntegrationTestInitService;
 import com.dotmarketing.beans.Host;
 import com.dotmarketing.beans.Permission;
@@ -27,6 +36,7 @@ import com.dotmarketing.business.CacheLocator;
 import com.dotmarketing.business.PermissionAPI;
 import com.dotmarketing.business.Role;
 import com.dotmarketing.business.RoleAPI;
+import com.dotmarketing.common.db.DotConnect;
 import com.dotmarketing.exception.AlreadyExistException;
 import com.dotmarketing.exception.DoesNotExistException;
 import com.dotmarketing.exception.DotDataException;
@@ -37,6 +47,8 @@ import com.dotmarketing.portlets.contentlet.model.Contentlet;
 import com.dotmarketing.portlets.contentlet.model.ContentletDependencies;
 import com.dotmarketing.portlets.contentlet.model.IndexPolicy;
 import com.dotmarketing.portlets.folders.business.FolderAPI;
+import com.dotmarketing.portlets.languagesmanager.business.LanguageDeletedEvent;
+import com.dotmarketing.portlets.languagesmanager.model.Language;
 import com.dotmarketing.portlets.structure.model.ContentletRelationships;
 import com.dotmarketing.portlets.structure.model.Structure;
 import com.dotmarketing.portlets.workflows.actionlet.ArchiveContentActionlet;
@@ -48,6 +60,8 @@ import com.dotmarketing.portlets.workflows.actionlet.SaveContentActionlet;
 import com.dotmarketing.portlets.workflows.actionlet.SaveContentAsDraftActionlet;
 import com.dotmarketing.portlets.workflows.actionlet.UnarchiveContentActionlet;
 import com.dotmarketing.portlets.workflows.actionlet.UnpublishContentActionlet;
+import com.dotmarketing.portlets.workflows.business.WorkflowAPI.SystemAction;
+import com.dotmarketing.portlets.workflows.model.SystemActionWorkflowActionMapping;
 import com.dotmarketing.portlets.workflows.model.WorkflowAction;
 import com.dotmarketing.portlets.workflows.model.WorkflowActionClass;
 import com.dotmarketing.portlets.workflows.model.WorkflowComment;
@@ -56,10 +70,14 @@ import com.dotmarketing.portlets.workflows.model.WorkflowScheme;
 import com.dotmarketing.portlets.workflows.model.WorkflowState;
 import com.dotmarketing.portlets.workflows.model.WorkflowStep;
 import com.dotmarketing.portlets.workflows.model.WorkflowTask;
+import com.dotmarketing.util.Logger;
 import com.dotmarketing.util.UtilMethods;
 import com.liferay.portal.model.User;
 import com.liferay.util.StringPool;
 import java.io.IOException;
+import java.time.LocalDate;
+import java.time.Month;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -72,6 +90,7 @@ import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import org.junit.AfterClass;
+import org.junit.Assert;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
@@ -561,6 +580,425 @@ public class WorkflowAPITest extends IntegrationTestBase {
 
     }
 
+    @Test()
+    public void delete_action_and_dependencies_Test()
+            throws DotDataException, DotSecurityException, AlreadyExistException {
+
+        // 1 create the step with one step and one action
+        // 2 create a content type
+        // 3 associated this action to scheme and content type
+        // 4 check if mappings exists
+        // 5 deletes the action
+        // check mappings are gone and cache clean
+
+        final long time               = System.currentTimeMillis();
+        final String myWorkflowName   = "workflow"+time;
+        final String myStep1Name      = "Step1"+time;
+        final String myActionName     = "Action1"+time;
+        final WorkflowScheme myWorkflowScheme       = addWorkflowScheme(myWorkflowName);
+        final WorkflowStep   myWorkflowSchemeStep1  = addWorkflowStep(myStep1Name, 1, false, false, myWorkflowScheme.getId());
+        final WorkflowAction myWorkflowSchemeAction = addWorkflowAction(myActionName, 1, myWorkflowSchemeStep1.getId(), true, myWorkflowSchemeStep1.getId(), reviewer, myWorkflowScheme.getId());
+        final String      myContentTypeName         = "CTWorkflowTesting_" + time;
+        final ContentType myContentType             = insertContentType(myContentTypeName, BaseContentType.CONTENT);
+
+        workflowAPI.saveSchemeIdsForContentType                     (myContentType, CollectionsUtils.set(myWorkflowScheme.getId()));
+        workflowAPI.mapSystemActionToWorkflowActionForContentType   (SystemAction.NEW, myWorkflowSchemeAction, myContentType);
+        workflowAPI.mapSystemActionToWorkflowActionForWorkflowScheme(SystemAction.NEW, myWorkflowSchemeAction, myWorkflowScheme);
+
+        final List<SystemActionWorkflowActionMapping> contentTypeMappings = workflowAPI.findSystemActionsByContentType(myContentType, user);
+        final List<SystemActionWorkflowActionMapping> schemeMappings      = workflowAPI.findSystemActionsByScheme     (myWorkflowScheme, user);
+
+        assertNotNull("contentTypeMappings can not be null", contentTypeMappings);
+        assertNotNull("schemeMappings can not be null",      schemeMappings);
+
+        assertEquals("contentTypeMappings must have 1 record", 1, contentTypeMappings.size());
+        assertEquals("schemeMappings must have 1 record",      1, schemeMappings.size());
+
+        workflowAPI.deleteAction(myWorkflowSchemeAction, user);
+
+        final List<SystemActionWorkflowActionMapping> contentTypeMappings2 = workflowAPI.findSystemActionsByContentType(myContentType, user);
+        final List<SystemActionWorkflowActionMapping> schemeMappings2      = workflowAPI.findSystemActionsByScheme     (myWorkflowScheme, user);
+
+        assertFalse("contentTypeMappings2 and contentTypeMappings must be diff", contentTypeMappings == contentTypeMappings2);
+        assertFalse("schemeMappings2 and schemeMappings must be diff", schemeMappings == schemeMappings2);
+        assertFalse("contentTypeMappings2 must be null", UtilMethods.isSet(contentTypeMappings2));
+        assertFalse("schemeMappings2 must be null", UtilMethods.isSet(schemeMappings2));
+
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void mapSystemActionToWorkflowActionForContentType_Null_SystemAction_Test() throws DotDataException {
+
+        workflowAPI.mapSystemActionToWorkflowActionForContentType(null, null, null);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void mapSystemActionToWorkflowActionForContentType_Null_WFAction_Test() throws DotDataException {
+
+        workflowAPI.mapSystemActionToWorkflowActionForContentType(WorkflowAPI.SystemAction.NEW, null, null);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void mapSystemActionToWorkflowActionForContentType_Null_ContentType_Test() throws DotDataException, DotSecurityException {
+
+        workflowAPI.mapSystemActionToWorkflowActionForContentType(WorkflowAPI.SystemAction.NEW, workflowAPI.findAction(
+                SystemWorkflowConstants.WORKFLOW_SAVE_ACTION_ID, APILocator.systemUser()), null);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void mapSystemActionToWorkflowActionForContentType_InvalidHost_ContentType_Test() throws DotDataException, DotSecurityException {
+
+        workflowAPI.mapSystemActionToWorkflowActionForContentType(WorkflowAPI.SystemAction.NEW, workflowAPI.findAction(
+                SystemWorkflowConstants.WORKFLOW_SAVE_ACTION_ID, APILocator.systemUser()), APILocator.systemHost().getContentType());
+    }
+
+    @Test()
+    public void onLanguageDeletedEvent_Test() throws DotDataException, DotSecurityException {
+
+        Language frenchLanguage = null;
+        Contentlet contentlet = null;
+
+        try {
+            frenchLanguage = new LanguageDataGen()
+                    .country("French")
+                    .countryCode("FR")
+                    .languageCode("fr")
+                    .languageName("French").nextPersisted();
+
+            final ContentType contentGenericType = contentTypeAPI.find("webPageContent");
+            final String unicodeText = "Numéro de téléphone";
+
+            final ContentletDataGen contentletDataGen = new ContentletDataGen(contentGenericType.id());
+            contentlet = contentletDataGen.setProperty("title", "TestContent")
+                    .setProperty("body", unicodeText ).languageId(frenchLanguage.getId()).nextPersisted();
+            final WorkflowStep workflowStep           = workflowAPI.findStep(SystemWorkflowConstants.WORKFLOW_NEW_STEP_ID);
+            //UnassignedWorkflowContentletCheckinListener.assigned is called by default creating a task. So we better reset here before we get an duplicate entry violation.
+            workflowAPI.deleteWorkflowTaskByContentletIdAnyLanguage(contentlet, user);
+            final WorkflowTask workflowTask = workflowAPI.createWorkflowTask(contentlet, user, workflowStep, "test", "test");
+            workflowAPI.saveWorkflowTask(workflowTask);
+
+            Optional<WorkflowStep> currentStepOpt = workflowAPI.findCurrentStep(contentlet);
+            assertTrue(currentStepOpt.isPresent());
+            assertEquals(SystemWorkflowConstants.WORKFLOW_NEW_STEP_ID, currentStepOpt.get().getId());
+            APILocator.getLocalSystemEventsAPI().notify(new LanguageDeletedEvent(frenchLanguage));
+            frenchLanguage = null;
+
+            final List<Map<String, Object>>  results = new DotConnect().setSQL("select * from workflow_task where id = ?")
+                    .addParam(workflowTask.getId()).loadObjectResults();
+            assertFalse(UtilMethods.isSet(results));
+            final List<WorkflowHistory> histories = workflowAPI.findWorkflowHistory(workflowTask);
+            assertFalse(UtilMethods.isSet(histories));
+        } finally {
+
+            if (null != frenchLanguage) {
+                LanguageDataGen.remove(frenchLanguage);
+            }
+        }
+    }
+
+    @Test()
+    public void findActionMappedBySystemActionContentlet_Test() throws DotDataException, DotSecurityException {
+
+        final ContentType contentGenericType = new ContentTypeDataGen().workflowId(SystemWorkflowConstants.SYSTEM_WORKFLOW_ID)
+                .baseContentType(BaseContentType.CONTENT)
+                .field(new FieldDataGen().name("title").velocityVarName("title").next())
+                .field(new FieldDataGen().name("body").velocityVarName("body").next()).nextPersisted();
+        final String unicodeText = "Numéro de téléphone";
+
+        final List<WorkflowScheme> schemes = workflowAPI.findSchemesForContentType(contentGenericType);
+        Logger.info(this, "Schemes for content type: " + contentGenericType.variable() + ", schemes" + schemes);
+        assertTrue(schemes.stream().anyMatch(scheme -> scheme.getId().equals(SystemWorkflowConstants.SYSTEM_WORKFLOW_ID)));
+
+        final ContentletDataGen contentletDataGen = new ContentletDataGen(contentGenericType.id());
+        Contentlet contentlet = contentletDataGen.setProperty("title", "TestContent")
+                .setProperty("body", unicodeText ).languageId(APILocator.getLanguageAPI().getDefaultLanguage().getId()).nextPersisted();
+        contentletAPI.lock(contentlet, user, false);
+
+        Optional<WorkflowStep> workflowStep = workflowAPI.findCurrentStep(contentlet);
+        if (workflowStep.isPresent()) {
+            workflowAPI.deleteWorkflowTaskByContentletIdAnyLanguage(contentlet, user);
+        }
+
+        assertFalse(workflowAPI.findCurrentStep(contentlet).isPresent());
+
+        Optional<WorkflowAction> workflowActionOpt = workflowAPI.findActionMappedBySystemActionContentlet
+                (contentlet, WorkflowAPI.SystemAction.NEW, user);
+
+        assertTrue(workflowActionOpt.isPresent());
+        assertEquals(SystemWorkflowConstants.WORKFLOW_SAVE_ACTION_ID, workflowActionOpt.get().getId());
+
+        workflowActionOpt = workflowAPI.findActionMappedBySystemActionContentlet
+                (contentlet, WorkflowAPI.SystemAction.EDIT, user);
+
+        assertTrue(workflowActionOpt.isPresent());
+        assertEquals(SystemWorkflowConstants.WORKFLOW_SAVE_ACTION_ID, workflowActionOpt.get().getId());
+    }
+
+    @Test()
+    public void mapSystemActionToWorkflowActionForContentType_Test() throws DotDataException, DotSecurityException {
+
+        final WorkflowAction saveAction =
+                workflowAPI.findAction(SystemWorkflowConstants.WORKFLOW_SAVE_ACTION_ID, APILocator.systemUser());
+
+        workflowAPI.saveSchemeIdsForContentType(contentType, CollectionsUtils.set(SystemWorkflowConstants.SYSTEM_WORKFLOW_ID));
+
+        final SystemActionWorkflowActionMapping mapping =
+                workflowAPI.mapSystemActionToWorkflowActionForContentType
+                    (WorkflowAPI.SystemAction.NEW, saveAction, contentType);
+
+        assertNotNull(mapping);
+        assertEquals(WorkflowAPI.SystemAction.NEW, mapping.getSystemAction());
+        assertEquals(saveAction,  mapping.getWorkflowAction());
+        assertEquals(contentType, mapping.getOwner());
+
+        final Optional<SystemActionWorkflowActionMapping> savedMapping =
+                workflowAPI.findSystemActionByIdentifier(mapping.getIdentifier(), APILocator.systemUser());
+
+        assertNotNull(savedMapping);
+        assertTrue(savedMapping.isPresent());
+        assertEquals(WorkflowAPI.SystemAction.NEW, savedMapping.get().getSystemAction());
+        assertEquals(saveAction,  savedMapping.get().getWorkflowAction());
+        assertEquals(contentType.id(), ContentType.class.cast(savedMapping.get().getOwner()).id());
+
+        final SystemActionWorkflowActionMapping mappingEdit =
+                workflowAPI.mapSystemActionToWorkflowActionForContentType
+                        (WorkflowAPI.SystemAction.EDIT, saveAction, contentType);
+
+        assertNotNull(mappingEdit);
+        assertEquals(WorkflowAPI.SystemAction.EDIT, mappingEdit.getSystemAction());
+        assertEquals(saveAction,  mappingEdit.getWorkflowAction());
+        assertEquals(contentType, mappingEdit.getOwner());
+
+        /////
+
+        final Optional<SystemActionWorkflowActionMapping> systemActionByContentTypeOpt = workflowAPI.findSystemActionByContentType
+                (WorkflowAPI.SystemAction.NEW, contentType, APILocator.systemUser());
+
+        assertNotNull(systemActionByContentTypeOpt);
+        assertTrue(systemActionByContentTypeOpt.isPresent());
+        assertEquals(WorkflowAPI.SystemAction.NEW, systemActionByContentTypeOpt.get().getSystemAction());
+        assertEquals(saveAction, systemActionByContentTypeOpt.get().getWorkflowAction());
+        assertEquals(contentType, systemActionByContentTypeOpt.get().getOwner());
+
+        final Optional<SystemActionWorkflowActionMapping> systemActionByContentTypeEditOpt = workflowAPI.findSystemActionByContentType
+                (WorkflowAPI.SystemAction.EDIT, contentType, APILocator.systemUser());
+
+        assertNotNull(systemActionByContentTypeEditOpt);
+        assertTrue(systemActionByContentTypeEditOpt.isPresent());
+        assertEquals(WorkflowAPI.SystemAction.EDIT, systemActionByContentTypeEditOpt.get().getSystemAction());
+        assertEquals(saveAction, systemActionByContentTypeEditOpt.get().getWorkflowAction());
+        assertEquals(contentType, systemActionByContentTypeEditOpt.get().getOwner());
+
+        final List<SystemActionWorkflowActionMapping> mappings = workflowAPI.findSystemActionsByContentType(contentType, APILocator.systemUser());
+
+        assertTrue(UtilMethods.isSet(mappings));
+        assertTrue(mappings.size() >= 2);
+
+        final Contentlet contentlet = new Contentlet();
+        contentlet.setContentType(contentType);
+
+        final Optional<WorkflowAction> newAction = workflowAPI.findActionMappedBySystemActionContentlet
+                (contentlet, WorkflowAPI.SystemAction.NEW, APILocator.systemUser());
+
+        assertTrue(newAction.isPresent());
+        assertEquals(saveAction, newAction.get());
+
+        /////
+        final List<SystemActionWorkflowActionMapping> systemActionsByWorkflowActionList =
+                workflowAPI.findSystemActionsByWorkflowAction(saveAction, APILocator.systemUser());
+
+        assertTrue(UtilMethods.isSet(systemActionsByWorkflowActionList));
+        assertTrue(systemActionsByWorkflowActionList.stream().anyMatch(aMapping -> aMapping.getSystemAction() == WorkflowAPI.SystemAction.NEW));
+
+        for (final SystemActionWorkflowActionMapping systemActionWorkflowActionMapping : mappings) {
+            workflowAPI.deleteSystemAction(systemActionWorkflowActionMapping);
+        }
+
+        final Optional<SystemActionWorkflowActionMapping> systemActionByContentTypeDeletedOpt = workflowAPI.findSystemActionByContentType
+                (WorkflowAPI.SystemAction.NEW, contentType, APILocator.systemUser());
+
+        assertNotNull(systemActionByContentTypeDeletedOpt);
+        assertFalse(systemActionByContentTypeDeletedOpt.isPresent());
+    }
+
+
+
+    /////
+    @Test(expected = IllegalArgumentException.class)
+    public void mapSystemActionToWorkflowActionForWorkflowScheme_Null_SystemAction_Test() throws DotDataException {
+
+        workflowAPI.mapSystemActionToWorkflowActionForWorkflowScheme(null, null, null);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void mapSystemActionToWorkflowActionForWorkflowScheme_Null_WFAction_Test() throws DotDataException {
+
+        workflowAPI.mapSystemActionToWorkflowActionForWorkflowScheme(WorkflowAPI.SystemAction.NEW, null, null);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void mapSystemActionToWorkflowActionForWorkflowScheme_Null_Workflow_Scheme_Test() throws DotDataException, DotSecurityException {
+
+        workflowAPI.mapSystemActionToWorkflowActionForWorkflowScheme(WorkflowAPI.SystemAction.NEW, workflowAPI.findAction(
+                SystemWorkflowConstants.WORKFLOW_SAVE_ACTION_ID, APILocator.systemUser()), null);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void mapSystemActionToWorkflowActionForWorkflowScheme_InvalidScheme_Test() throws DotDataException, DotSecurityException {
+
+        final Optional<WorkflowScheme> foundSchemeOpt = workflowAPI.findSchemes(false).stream().filter(workflowScheme ->
+                !SystemWorkflowConstants.SYSTEM_WORKFLOW_ID.equals(workflowScheme.getId())).findFirst();
+
+        if (foundSchemeOpt.isPresent()) {
+
+            workflowAPI.mapSystemActionToWorkflowActionForWorkflowScheme(WorkflowAPI.SystemAction.NEW, workflowAPI.findAction(
+                    SystemWorkflowConstants.WORKFLOW_SAVE_ACTION_ID, APILocator.systemUser()), foundSchemeOpt.get());
+        }
+    }
+
+    @Test()
+    public void mapSystemActionToWorkflowActionForWorkflowScheme_Test() throws DotDataException, DotSecurityException {
+
+        final WorkflowScheme myWorkflow = TestWorkflowUtils
+                .getDocumentWorkflow("Workflow" + System.currentTimeMillis());
+        final ContentType blogContentType = TestDataUtils.getBlogLikeContentType();
+
+        workflowAPI.saveSchemeIdsForContentType(blogContentType,
+                CollectionsUtils.set(myWorkflow.getId()));
+
+        final WorkflowAction firstAction =
+            workflowAPI.findActions(workflowAPI.findFirstStep(myWorkflow.getId()).get(), user).stream().findFirst().get();
+        final SystemActionWorkflowActionMapping mapping =
+                workflowAPI.mapSystemActionToWorkflowActionForWorkflowScheme
+                        (WorkflowAPI.SystemAction.NEW, firstAction, myWorkflow);
+
+        assertNotNull(mapping);
+        assertEquals(WorkflowAPI.SystemAction.NEW, mapping.getSystemAction());
+        assertEquals(firstAction,  mapping.getWorkflowAction());
+        assertEquals(myWorkflow, mapping.getOwner());
+
+        final List<SystemActionWorkflowActionMapping> systemActionsByScheme = workflowAPI.findSystemActionsByScheme
+                (myWorkflow, APILocator.systemUser());
+
+        assertNotNull(systemActionsByScheme);
+        assertTrue(UtilMethods.isSet(systemActionsByScheme));
+        assertTrue(systemActionsByScheme.stream().anyMatch(systemMapping ->
+                systemMapping.getSystemAction() == WorkflowAPI.SystemAction.NEW && systemMapping.getWorkflowAction().equals(firstAction)));
+
+        final Contentlet contentlet = TestDataUtils
+                .getBlogContent(true, APILocator.getLanguageAPI().getDefaultLanguage().getId(),
+                        blogContentType.id());
+        final Optional<WorkflowAction> newAction = workflowAPI.findActionMappedBySystemActionContentlet
+                (contentlet, WorkflowAPI.SystemAction.NEW, APILocator.systemUser());
+
+        assertTrue(newAction.isPresent());
+        assertEquals(firstAction, newAction.get());
+
+        for (final SystemActionWorkflowActionMapping systemActionWorkflowActionMapping: systemActionsByScheme) {
+
+            workflowAPI.deleteSystemAction(systemActionWorkflowActionMapping);
+        }
+
+        final List<SystemActionWorkflowActionMapping> systemActionsBySchemeDeleted = workflowAPI.findSystemActionsByScheme
+                (myWorkflow, APILocator.systemUser());
+
+        assertFalse(UtilMethods.isSet(systemActionsBySchemeDeleted));
+    }
+    /////
+
+    @Test(expected = DoesNotExistException.class)
+    public void findFirstStepForActionNonExistingTest () throws DotDataException {
+
+        final WorkflowAction workflowAction       = new WorkflowAction();
+        workflowAction.setId("non-existing");
+        final Optional<WorkflowStep> workflowStep = workflowAPI.findFirstStepForAction(workflowAction);
+        Assert.assertFalse(workflowStep.isPresent());
+    }
+
+    @Test()
+    public void findFirstStepForActionExistingTest () throws DotDataException, DotSecurityException {
+
+        final WorkflowAction workflowAction       = workflowAPI.findAction(SystemWorkflowConstants.WORKFLOW_SAVE_ACTION_ID, APILocator.systemUser());
+        final Optional<WorkflowStep> workflowStep = workflowAPI.findFirstStepForAction(workflowAction);
+        Assert.assertTrue(workflowStep.isPresent());
+        Assert.assertEquals(SystemWorkflowConstants.WORKFLOW_NEW_STEP_ID, workflowStep.get().getId());
+    }
+
+    @Test(expected = DoesNotExistException.class)
+    public void findFirstStepNonExistingTest () throws DotDataException {
+
+        final Optional<WorkflowStep> workflowStep = workflowAPI.findFirstStep("xxxx");
+        Assert.assertFalse(workflowStep.isPresent());
+    }
+
+    @Test()
+    public void findFirstStepExistingTest () throws DotDataException {
+
+        final Optional<WorkflowStep> workflowStep = workflowAPI.findFirstStep(SystemWorkflowConstants.SYSTEM_WORKFLOW_ID);
+        Assert.assertTrue(workflowStep.isPresent());
+        Assert.assertEquals(SystemWorkflowConstants.WORKFLOW_NEW_STEP_ID, workflowStep.get().getId());
+    }
+
+    @Test()
+    public void hasSaveActionlet_True_Test () throws DotDataException, DotSecurityException {
+
+        final WorkflowAction saveAction = workflowAPI.findAction
+                (SystemWorkflowConstants.WORKFLOW_SAVE_ACTION_ID, APILocator.systemUser());
+
+        assertNotNull(saveAction);
+        assertTrue(workflowAPI.hasSaveActionlet(saveAction));
+    }
+
+    @Test()
+    public void hasSaveActionlet_False_Test () throws DotDataException, DotSecurityException {
+
+        final WorkflowAction deleteAction = workflowAPI.findAction
+                (SystemWorkflowConstants.WORKFLOW_DELETE_ACTION_ID, APILocator.systemUser());
+
+        assertNotNull(deleteAction);
+        assertFalse(workflowAPI.hasSaveActionlet(deleteAction));
+    }
+
+    @Test()
+    public void hasPublishActionlet_True_Test () throws DotDataException, DotSecurityException {
+
+        final WorkflowAction publishAction = workflowAPI.findAction
+                (SystemWorkflowConstants.WORKFLOW_PUBLISH_ACTION_ID, APILocator.systemUser());
+
+        assertNotNull(publishAction);
+        assertTrue(workflowAPI.hasPublishActionlet(publishAction));
+    }
+
+    @Test()
+    public void hasPublishActionlet_False_Test () throws DotDataException, DotSecurityException {
+
+        final WorkflowAction deleteAction = workflowAPI.findAction
+                (SystemWorkflowConstants.WORKFLOW_DELETE_ACTION_ID, APILocator.systemUser());
+
+        assertNotNull(deleteAction);
+        assertFalse(workflowAPI.hasPublishActionlet(deleteAction));
+    }
+
+    @Test()
+    public void hasArchiveActionlet_True_Test () throws DotDataException, DotSecurityException {
+
+        final WorkflowAction publishAction = workflowAPI.findAction
+                (SystemWorkflowConstants.WORKFLOW_ARCHIVE_ACTION_ID, APILocator.systemUser());
+
+        assertNotNull(publishAction);
+        assertTrue(workflowAPI.hasArchiveActionlet(publishAction));
+    }
+
+    @Test()
+    public void hasArchiveActionlet_False_Test () throws DotDataException, DotSecurityException {
+
+        final WorkflowAction deleteAction = workflowAPI.findAction
+                (SystemWorkflowConstants.WORKFLOW_DELETE_ACTION_ID, APILocator.systemUser());
+
+        assertNotNull(deleteAction);
+        assertFalse(workflowAPI.hasArchiveActionlet(deleteAction));
+    }
+
     /**
      * This method test the saveSchemesForStruct method
      */
@@ -756,24 +1194,20 @@ public class WorkflowAPITest extends IntegrationTestBase {
             Contentlet c = APILocator.getContentletAPI().checkout(c2.getInode(), user, false);
 
             //set step action for content2
-            c.setStringProperty("wfActionId", workflowScheme2Step1Action1.getId());
+            c.setActionId(workflowScheme2Step1Action1.getId());
             c.setStringProperty("wfActionComments", "Test" + time);
 
             c2 = APILocator.getContentletAPI().checkin(c, user, false);
 
-            //check steps available for content without step
-            List<WorkflowStep> steps = workflowAPI.findStepsByContentlet(c1);
-            assertTrue(steps.size() == 3);
-
             //get step for content with a selection action
-            steps = workflowAPI.findStepsByContentlet(c2);
-            assertTrue(steps.size() == 1);
-            assertTrue(workflowScheme2Step2.getName().equals(steps.get(0).getName()));
+            List<WorkflowStep>  steps = workflowAPI.findStepsByContentlet(c2);
+            assertTrue(steps.size() >= 1);
+            // workflowScheme2Step2.getId(), true, workflowScheme2Step1.getId(),
+            assertEquals(workflowScheme2Step2.getName(), steps.get(0).getName());
         } finally {
-            contentletAPI.archive(c1, user, false);
-            contentletAPI.delete(c1, user, false);
-            contentletAPI.archive(c2, user, false);
-            contentletAPI.delete(c2, user, false);
+
+            contentletAPI.destroy(c1, user, false);
+            contentletAPI.destroy(c2, user, false);
         }
 
     }
@@ -892,8 +1326,7 @@ public class WorkflowAPITest extends IntegrationTestBase {
             assertTrue(workflowScheme3Step2.getId().equals(task.getStatus()));
 
         } finally {
-            contentletAPI.archive(c1, user, false);
-            contentletAPI.delete(c1, user, false);
+            contentletAPI.destroy(c1, user, false);
         }
     }
 
@@ -930,6 +1363,7 @@ public class WorkflowAPITest extends IntegrationTestBase {
             testContentlet.setHost(defaultHost.getIdentifier());
             testContentlet.setIndexPolicy(IndexPolicy.FORCE);
             testContentlet = contentletAPI.checkin(testContentlet, user, false);
+            APILocator.getWorkflowAPI().deleteWorkflowTaskByContentletIdAnyLanguage(testContentlet, user);
 
             //Adding permissions to the just created contentlet
             List<Permission> permissions = new ArrayList<>();
@@ -988,7 +1422,7 @@ public class WorkflowAPITest extends IntegrationTestBase {
 
             assertNotNull(foundActions);
             assertFalse(foundActions.isEmpty());
-            assertEquals(foundActions.size(), 4);
+            assertTrue(foundActions.size() > 1);
 
             foundActions = APILocator.getWorkflowAPI()
                     .findAvailableActions(testContentlet, janeReviewer);
@@ -1012,8 +1446,7 @@ public class WorkflowAPITest extends IntegrationTestBase {
             assertEquals(foundActions.size(), 5);
 
         } finally {
-            contentletAPI.archive(testContentlet, user, false);
-            contentletAPI.delete(testContentlet, user, false);
+            contentletAPI.destroy(testContentlet, user, false);
         }
 
     }
@@ -1054,6 +1487,7 @@ public class WorkflowAPITest extends IntegrationTestBase {
             testContentlet1.setHost(defaultHost.getIdentifier());
             testContentlet1.setIndexPolicy(IndexPolicy.FORCE);
             testContentlet1 = contentletAPI.checkin(testContentlet1, user, false);
+            APILocator.getWorkflowAPI().deleteWorkflowTaskByContentletIdAnyLanguage(testContentlet1, user);
 
             final Role role = APILocator.getRoleAPI().getUserRole(billIntranet);
             //Adding permissions to the just created contentlet
@@ -1073,18 +1507,21 @@ public class WorkflowAPITest extends IntegrationTestBase {
             testContentlet1Checkout.setStringProperty(FIELD_VAR_NAME, "WorkflowContentTest_" + System.currentTimeMillis());
             testContentlet1Checkout.setIndexPolicy(IndexPolicy.FORCE);
             testContentlet2 = contentletAPI.checkin(testContentlet1Checkout, user, false);
+            APILocator.getWorkflowAPI().deleteWorkflowTaskByContentletIdAnyLanguage(testContentlet2, user);
 
             // top version
             testContentlet2Checkout = contentletAPI.checkout(testContentlet2.getInode(), user, false);
             testContentlet2Checkout.setStringProperty(FIELD_VAR_NAME, "WorkflowContentTest_" + System.currentTimeMillis());
             testContentlet2Checkout.setIndexPolicy(IndexPolicy.FORCE);
+            testContentlet1Checkout.setBoolProperty(Contentlet.DISABLE_WORKFLOW, true);
             testContentletTop = contentletAPI.checkin(testContentlet2Checkout, user, false);
+            APILocator.getWorkflowAPI().deleteWorkflowTaskByContentletIdAnyLanguage(testContentlet2Checkout, user);
 
             // expected behavior
             List<WorkflowAction> foundActions = APILocator.getWorkflowAPI().findAvailableActions(testContentletTop, billIntranet);
             assertNotNull(foundActions);
             assertFalse(foundActions.isEmpty());
-            assertEquals(foundActions.size(), 4);
+            assertTrue(foundActions.size() > 1);
 
             // no top version
             foundActions = APILocator.getWorkflowAPI()
@@ -1094,8 +1531,8 @@ public class WorkflowAPITest extends IntegrationTestBase {
         } finally {
             try {
                 final Contentlet contentletToDelete = contentletAPI.findContentletByIdentifierAnyLanguage(testContentletTop.getIdentifier());
-                contentletAPI.archive(contentletToDelete, user, false);
-                contentletAPI.delete(contentletToDelete, user, false);
+
+                contentletAPI.destroy(contentletToDelete, user, false);
             } catch (Exception e) {}
         }
     }
@@ -1180,8 +1617,7 @@ public class WorkflowAPITest extends IntegrationTestBase {
             }
 
         } finally {
-            contentletAPI.archive(testContentlet, user, false);
-            contentletAPI.delete(testContentlet, user, false);
+            contentletAPI.destroy(testContentlet, user, false);
         }
 
     }
@@ -1248,8 +1684,7 @@ public class WorkflowAPITest extends IntegrationTestBase {
             assertEquals(action.getName(), workflowScheme5Step1Action1.getName());
 
         } finally {
-            contentletAPI.archive(testContentlet, user, false);
-            contentletAPI.delete(testContentlet, user, false);
+            contentletAPI.destroy(testContentlet, user, false);
         }
 
     }
@@ -2079,7 +2514,7 @@ public class WorkflowAPITest extends IntegrationTestBase {
 
             List<WorkflowHistory> histories1 = workflowAPI.findWorkflowHistory(task1);
             assertNotNull(histories1);
-            assertTrue(histories1.size() == 7);
+            assertEquals(7, histories1.size());
 
             WorkflowTask task2 = workflowAPI.findTaskByContentlet(contentlet2);
             assertNotNull(task2);
@@ -2090,7 +2525,7 @@ public class WorkflowAPITest extends IntegrationTestBase {
 
             List<WorkflowHistory> histories2 = workflowAPI.findWorkflowHistory(task2);
             assertNotNull(histories2);
-            assertTrue(histories2.size() == 6);
+            assertEquals(6, histories2.size());
 
             WorkflowTask task3 = workflowAPI.findTaskByContentlet(contentlet3);
             assertNotNull(task3);
@@ -2100,7 +2535,7 @@ public class WorkflowAPITest extends IntegrationTestBase {
 
             List<WorkflowHistory> histories3 = workflowAPI.findWorkflowHistory(task3);
             assertNotNull(histories3);
-            assertTrue(histories3.size() == 2);
+            assertEquals(2, histories3.size());
 
             WorkflowTask task4 = workflowAPI.findTaskByContentlet(contentlet4);
             assertNotNull(task4);
@@ -2110,7 +2545,7 @@ public class WorkflowAPITest extends IntegrationTestBase {
 
             List<WorkflowHistory> histories4 = workflowAPI.findWorkflowHistory(task4);
             assertNotNull(histories4);
-            assertTrue(histories4.size() == 3);
+            assertEquals(3, histories4.size());
 
             //Test the delete
             //Deleting workflow 7
@@ -2544,6 +2979,7 @@ public class WorkflowAPITest extends IntegrationTestBase {
                 .description("description")
                 .expireDateVar(null).folder(FolderAPI.SYSTEM_FOLDER).host(Host.SYSTEM_HOST)
                 .name(contentTypeName).owner("owner")
+                .defaultType(false)
                 .variable("velocityVarName" + contentTypeName);
 
         ContentType type = builder.build();
@@ -2598,9 +3034,7 @@ public class WorkflowAPITest extends IntegrationTestBase {
      * @param schemeId Scheme Id
      * @return The created step
      */
-    protected static WorkflowStep
-
-    addWorkflowStep(final String name, final int order,
+    protected static WorkflowStep addWorkflowStep(final String name, final int order,
             final boolean resolved,
             final boolean enableEscalation, final String schemeId)
             throws DotDataException, DotSecurityException {
@@ -2699,29 +3133,47 @@ public class WorkflowAPITest extends IntegrationTestBase {
     public static void cleanup()
             throws DotDataException, DotSecurityException, InterruptedException, ExecutionException, AlreadyExistException {
 
-        contentTypeAPI.delete(contentType);
-        contentTypeAPI.delete(contentType2);
-        contentTypeAPI.delete(contentType3);
+        if (null != contentType) {
+            contentTypeAPI.delete(contentType);
+        }
+
+        if (null != contentType2) {
+            contentTypeAPI.delete(contentType2);
+        }
+
+        if (null != contentType3) {
+            contentTypeAPI.delete(contentType3);
+        }
 
         //Deleting workflow 1
-        workflowAPI.archive(workflowScheme1, user);
-        workflowAPI.deleteScheme(workflowScheme1, user).get();
+        if (null != workflowScheme1) {
+            workflowAPI.archive(workflowScheme1, user);
+            workflowAPI.deleteScheme(workflowScheme1, user).get();
+        }
 
         //Deleting workflow 2
-        workflowAPI.archive(workflowScheme2, user);
-        workflowAPI.deleteScheme(workflowScheme2, user).get();
+        if (null != workflowScheme2) {
+            workflowAPI.archive(workflowScheme2, user);
+            workflowAPI.deleteScheme(workflowScheme2, user).get();
+        }
 
         //Deleting workflow 3
-        workflowAPI.archive(workflowScheme3, user);
-        workflowAPI.deleteScheme(workflowScheme3, user).get();
+        if (null != workflowScheme3) {
+            workflowAPI.archive(workflowScheme3, user);
+            workflowAPI.deleteScheme(workflowScheme3, user).get();
+        }
 
         //Deleting workflow 4
-        workflowAPI.archive(workflowScheme4, user);
-        workflowAPI.deleteScheme(workflowScheme4, user).get();
+        if (null != workflowScheme4) {
+            workflowAPI.archive(workflowScheme4, user);
+            workflowAPI.deleteScheme(workflowScheme4, user).get();
+        }
 
         //Deleting workflow 5
-        workflowAPI.archive(workflowScheme5, user);
-        workflowAPI.deleteScheme(workflowScheme5, user).get();
+        if (null != workflowScheme5) {
+            workflowAPI.archive(workflowScheme5, user);
+            workflowAPI.deleteScheme(workflowScheme5, user).get();
+        }
     }
 
     /**
@@ -3160,6 +3612,13 @@ public class WorkflowAPITest extends IntegrationTestBase {
                         .workflowActionId(action.getId()) //Return for Editing
                         .workflowActionComments(comment)
                         .workflowAssignKey(workflowAssignKey)
+                        .workflowPublishDate("2020-08-11")
+                        .workflowPublishTime("10-35")
+                        .workflowExpireDate("2020-08-12")
+                        .workflowExpireTime("18-35")
+                        .workflowFilterKey("Yaml File")
+                        .workflowWhereToSend("environment")
+                        .workflowIWantTo("publish")
                         .categories(Collections.emptyList())
                         .generateSystemEvent(Boolean.FALSE).build());
 
@@ -3261,10 +3720,211 @@ public class WorkflowAPITest extends IntegrationTestBase {
             }
 
         } finally {
-            contentletAPI.archive(c1, user, false);
-            contentletAPI.delete(c1, user, false);
+            try {
+
+                contentletAPI.destroy(c1, user, false);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
         }
 
+    }
+
+    @Test
+    public void Create_Contentlet_Assign_Task_With_Null_Status_Then_Checkin_Then_Verify_Auto_Assign_is_Called_And_New_Task_Is_Set_Contentlet()
+            throws DotDataException, DotSecurityException {
+
+        final WorkflowScheme scheme = TestWorkflowUtils.getSystemWorkflow();
+        final ContentType contentType = new ContentTypeDataGen().workflowId(scheme.getId())
+                .name("myLameContentType").nextPersisted();
+        final WorkflowStep emptyWorkflowStep = new WorkflowStep(); // This empty object will generate a null step id which is precisely the scenario we want to replicate.
+        final Contentlet contentlet = new ContentletDataGen(contentType.id()).nextPersisted();
+        final WorkflowTask task = workflowAPI
+                .createWorkflowTask(contentlet, user, emptyWorkflowStep,
+                        "test Task with null status",
+                        "test");
+        assertNull(task.getStatus());
+        final Contentlet out = contentletAPI.checkout(contentlet.getInode(), user, false);
+        // Set up some flags to make sure the `ContentletCheckinEvent` is issued.
+        out.setBoolProperty(Contentlet.DISABLE_WORKFLOW, true);
+        out.setBoolProperty(Contentlet.WORKFLOW_IN_PROGRESS, false);
+        out.setBoolProperty(Contentlet.AUTO_ASSIGN_WORKFLOW, true);
+        //The Workflow task should be assigned by UnassignedWorkflowContentletCheckinListener
+        APILocator.getLocalSystemEventsAPI().subscribe(ContentletCheckinEvent.class,
+                (EventSubscriber<ContentletCheckinEvent>) event -> {
+                    final Contentlet expectedContentlet = event.getContentlet();
+                    if (null != expectedContentlet) {
+                        // Ensure this is the same contentlet we sent.
+                        if (out.getIdentifier().equals(expectedContentlet.getIdentifier())) {
+                            try {
+                                final WorkflowTask workflowTask = APILocator.getWorkflowAPI()
+                                        .findTaskByContentlet(contentlet);
+                                assertNotNull(workflowTask);
+                                assertNotNull(workflowTask
+                                        .getStatus()); // null Status should have been taken care by now.
+                            } catch (DotDataException e) {
+                                Logger.error(WorkflowAPITest.class, e);
+                                fail(String
+                                        .format("Something happened getting the workflow task for contentlet [%s] ",
+                                                contentlet)
+                                );
+                            }
+                        }
+                    }
+                }
+        );
+        contentletAPI.checkin(out, user, false);
+    }
+
+    /**
+     * Tests the {@link WorkflowAPI#deleteWorkflowHistoryOldVersions(Date)} method
+     */
+    @Test
+    public void deleteWorkflowHistoryOldVersions() throws DotDataException {
+
+        final User systemUser = APILocator.systemUser();
+        final Language language = APILocator.getLanguageAPI().getDefaultLanguage();
+        final WorkflowAPI workflowAPI = APILocator.getWorkflowAPI();
+
+        final WorkflowScheme systemWorkflowScheme = workflowAPI.findSystemWorkflowScheme();
+        final ContentType contentType = new ContentTypeDataGen()
+                .workflowId(systemWorkflowScheme.getId())
+                .nextPersisted();
+
+        //Create a dummy contentlet
+        final Contentlet contentlet = new ContentletDataGen(contentType.id())
+                .languageId(language.getId())
+                .nextPersisted();
+
+        assertNotNull(contentlet);
+
+        //Saving a dummy workflow task
+        final WorkflowTask workflowTask = workflowAPI.findTaskByContentlet(contentlet);
+        assertNotNull(workflowTask);
+
+        //Get the count of the workflow history records before the inserts
+        final int initial = workflowHistoryCount(workflowTask.getId());
+        assertEquals(0, initial);
+
+        // Saving workflow history records with a 2019 creation date
+        LocalDate date1 = LocalDate.of(2019, Month.DECEMBER, 15);
+        final Date pastDate1 = Date.from(date1.atStartOfDay(ZoneId.systemDefault()).toInstant());
+
+        for (int i = 0; i < 5; i++) {
+            final WorkflowHistory workflowHistory = new WorkflowHistory();
+            workflowHistory.setChangeDescription("workflow history description");
+            workflowHistory.setCreationDate(pastDate1);
+            workflowHistory.setMadeBy(systemUser.getUserId());
+            workflowHistory.setWorkflowtaskId(workflowTask.getId());
+            workflowAPI.saveWorkflowHistory(workflowHistory);
+        }
+
+        // Saving workflow history records with a 2018 creation date
+        LocalDate date2 = LocalDate.of(2018, Month.DECEMBER, 15);
+        final Date pastDate2 = Date.from(date2.atStartOfDay(ZoneId.systemDefault()).toInstant());
+
+        // Saving workflow history records
+        for (int i = 0; i < 5; i++) {
+            final WorkflowHistory workflowHistory = new WorkflowHistory();
+            workflowHistory.setChangeDescription("workflow history description");
+            workflowHistory.setCreationDate(pastDate2);
+            workflowHistory.setMadeBy(systemUser.getUserId());
+            workflowHistory.setWorkflowtaskId(workflowTask.getId());
+            workflowAPI.saveWorkflowHistory(workflowHistory);
+        }
+
+        //Get the count of the workflow history records before deleting
+        final int before = workflowHistoryCount(workflowTask.getId());
+        assertEquals(10, before);
+
+        // Now we will try to delete and validate the deletes with different dates
+        LocalDate date3 = LocalDate.of(2018, Month.DECEMBER, 16);
+        final Date pastDate3 = Date.from(date3.atStartOfDay(ZoneId.systemDefault()).toInstant());
+        int deleted = workflowAPI.deleteWorkflowHistoryOldVersions(pastDate3);
+        assertTrue(deleted > 0);
+        final int left = workflowHistoryCount(workflowTask.getId());
+        assertEquals(5, left);
+
+        LocalDate date4 = LocalDate.of(2019, Month.DECEMBER, 16);
+        final Date pastDate4 = Date.from(date4.atStartOfDay(ZoneId.systemDefault()).toInstant());
+        deleted = workflowAPI.deleteWorkflowHistoryOldVersions(pastDate4);
+        assertTrue(deleted > 0);
+
+        final int finalCount = workflowHistoryCount(workflowTask.getId());
+        assertEquals(0, finalCount);
+    }
+
+    private int workflowHistoryCount(final String workflowTaskId) throws DotDataException {
+
+        DotConnect dotConnect = new DotConnect();
+        //Get the count of the workflow history records before deleting.
+        String countSQL = "select count(*) as count from workflow_history where workflowtask_id = ?";
+        dotConnect.setSQL(countSQL);
+        dotConnect.addParam(workflowTaskId);
+        List<Map<String, String>> result = dotConnect.loadResults();
+
+        return Integer.parseInt(result.get(0).get("count"));
+    }
+
+    /**
+     * Copy Properties: The idea is to check if the transient variables on the contentlet such as workflow attributes are being copied after save
+     * Given Scenario: Create a content, fires a save and checks if the new checkout still having the workflow attributes
+     * ExpectedResult: The workflow attributes still there after the save
+     *
+     */
+    @Test
+    public void fireWorkflowAction_checkPropertiesAreCopied_successfully()
+            throws DotDataException, DotSecurityException, AlreadyExistException, ExecutionException, InterruptedException {
+        WorkflowScheme workflowScheme = null;
+        ContentType contentType = null;
+        try {
+
+            contentType = generateContentTypeAndAssignPermissions("KeepWfTaskStatus",
+                    BaseContentType.CONTENT, editPermission, contributor.getId());
+
+            // Create testing workflows
+            workflowScheme = createDocumentManagentReplica(
+                    DOCUMENT_MANAGEMENT_WORKFLOW_NAME + "_5_" + UtilMethods
+                            .dateToHTMLDate(new Date(), DATE_FORMAT));
+
+            final Set<String> schemeIds = new HashSet<>();
+            schemeIds.add(workflowScheme.getId());
+            workflowAPI.saveSchemeIdsForContentType(contentType, schemeIds);
+
+            //Add Workflow Task
+            //Contentlet1 on published step
+            Contentlet contentlet = createContent("testCacheFindStepsByContentlet", contentType);
+
+            List<WorkflowAction> actions = workflowAPI
+                    .findAvailableActions(contentlet, joeContributor);
+            final WorkflowAction saveAsDraft = actions.get(0);
+
+            //As Contributor - Save as Draft
+            final ContentletRelationships contentletRelationships = APILocator.getContentletAPI()
+                    .getAllRelationships(contentlet);
+            //save as Draft
+            contentlet = fireWorkflowAction(contentlet, contentletRelationships, saveAsDraft,
+                    StringPool.BLANK, StringPool.BLANK, joeContributor);
+
+            Assert.assertTrue(UtilMethods.isSet(contentlet.getStringProperty(Contentlet.WORKFLOW_PUBLISH_DATE)));
+            Assert.assertTrue(UtilMethods.isSet(contentlet.getStringProperty(Contentlet.WORKFLOW_PUBLISH_TIME)));
+            Assert.assertTrue(UtilMethods.isSet(contentlet.getStringProperty(Contentlet.WORKFLOW_EXPIRE_DATE)));
+            Assert.assertTrue(UtilMethods.isSet(contentlet.getStringProperty(Contentlet.WORKFLOW_EXPIRE_TIME)));
+            Assert.assertTrue(UtilMethods.isSet(contentlet.getStringProperty(Contentlet.WHERE_TO_SEND)));
+            Assert.assertTrue(UtilMethods.isSet(contentlet.getStringProperty(Contentlet.FILTER_KEY)));
+            Assert.assertTrue(UtilMethods.isSet(contentlet.getStringProperty(Contentlet.I_WANT_TO)));
+            Assert.assertTrue(UtilMethods.isNotSet(contentlet.getStringProperty(Contentlet.WORKFLOW_COMMENTS_KEY)));
+            Assert.assertTrue(UtilMethods.isNotSet(contentlet.getStringProperty(Contentlet.WORKFLOW_ASSIGN_KEY)));
+
+        } finally {
+            //clean test
+            //delete content type
+            contentTypeAPI.delete(contentType);
+
+            workflowScheme.setArchived(true);
+            workflowAPI.saveScheme(workflowScheme, user);
+            workflowAPI.deleteScheme(workflowScheme, user).get();
+        }
     }
 
 }

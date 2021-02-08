@@ -1,7 +1,7 @@
 package com.dotcms.rendering.velocity.viewtools.navigation;
 
 
-import com.dotmarketing.beans.Inode;
+
 import com.dotmarketing.portlets.browser.ajax.BrowserAjax;
 import com.google.common.annotations.VisibleForTesting;
 
@@ -26,11 +26,13 @@ import com.dotmarketing.util.RegExMatch;
 import com.dotmarketing.util.UtilMethods;
 
 import com.liferay.util.StringPool;
+import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
 import java.util.List;
 
 import javax.servlet.http.HttpServletRequest;
 
+import org.apache.commons.beanutils.BeanUtils;
 import org.apache.velocity.tools.view.context.ViewContext;
 import org.apache.velocity.tools.view.tools.ViewTool;
 
@@ -47,12 +49,8 @@ public class NavTool implements ViewTool {
     final long defaultLanguage = APILocator.getLanguageAPI().getDefaultLanguage().getId();
     static {
 
-        try {
-            systemUser = APILocator.getUserAPI()
-                .getSystemUser();
-        } catch (DotDataException e) {
-            Logger.error(NavTool.class, e.getMessage(), e);
-        }
+      systemUser = APILocator.systemUser();
+
     }
 
     @Override
@@ -81,13 +79,17 @@ public class NavTool implements ViewTool {
             path = path.substring(0, path.lastIndexOf("/"));
         }
 
-        Folder folder = !path.equals("/") ? APILocator.getFolderAPI()
+        final Folder originalFolder = !path.equals("/") ? APILocator.getFolderAPI()
             .findFolderByPath(path, host, systemUserParam, true)
                 : APILocator.getFolderAPI()
                     .findSystemFolder();
-        if (folder == null || !UtilMethods.isSet(folder.getIdentifier())) {
+
+        if (originalFolder == null || !UtilMethods.isSet(originalFolder.getIdentifier())) {
             return null;
         }
+
+        Folder folder = getDefensiveCopyOfFolder(originalFolder);
+
         NavResult result = CacheLocator.getNavToolCache()
             .getNav(host.getIdentifier(), folder.getInode(), languageId);
         if (result != null) {
@@ -105,6 +107,8 @@ public class NavTool implements ViewTool {
                                 .findFolderByPath(ident.getParentPath(), host, systemUserParam, false)
                                 .getInode();
             } else {
+                //set hostId to systemfolder, so when looking items only brings items of the selected site
+                folder.setHostId(host.getIdentifier());
                 parentId = null;
             }
             result = new NavResult(parentId, host.getIdentifier(), folder.getInode(), languageId);
@@ -172,7 +176,6 @@ public class NavTool implements ViewTool {
                         nav.setType("htmlpage");
                         nav.setPermissionId(itemPage.getPermissionId());
                         nav.setShowOnMenu(itemPage.isShowOnMenu());
-                        nav = new NavResultHydrated(nav, this.context);
                         children.add(nav);
                     }
                 } else if (item instanceof Link) {
@@ -191,7 +194,6 @@ public class NavTool implements ViewTool {
                     nav.setTarget(itemLink.getTarget());
                     nav.setPermissionId(itemLink.getPermissionId());
                     nav.setShowOnMenu(itemLink.isShowOnMenu());
-                    nav = new NavResultHydrated(nav, this.context);
                     children.add(nav);
                 } else if (item instanceof IFileAsset) {
                     IFileAsset itemFile = (IFileAsset) item;
@@ -207,7 +209,6 @@ public class NavTool implements ViewTool {
                         nav.setType("file");
                         nav.setPermissionId(itemFile.getPermissionId());
                         nav.setShowOnMenu(itemFile.isShowOnMenu());
-                        nav = new NavResultHydrated(nav, this.context);
                         children.add(nav);
                     }
                 }
@@ -218,6 +219,22 @@ public class NavTool implements ViewTool {
 
             return new NavResultHydrated(result, this.context);
         }
+    }
+
+    /**
+     * Makes a defensive copy of the given folder to avoid mutating cached version
+     * @param originalFolder folder to make the defensive copy from
+     * @return defensive copy
+     */
+    private Folder getDefensiveCopyOfFolder(Folder originalFolder) {
+        Folder folder = new Folder();
+        try {
+            BeanUtils.copyProperties(folder, originalFolder);
+        } catch (IllegalAccessException | InvocationTargetException e) {
+            folder = originalFolder;
+            Logger.warnAndDebug(NavTool.class,"Defensive copy failed. Using original object", e);
+        }
+        return folder;
     }
 
     private void addFolderToNav(Host host, long languageId, Folder folder, List<NavResult> children,
@@ -237,7 +254,6 @@ public class NavTool implements ViewTool {
 
         // it will load lazily its children
         folderIds.add(itemFolder.getInode());
-        nav = new NavResultHydrated(nav, this.context);
         children.add(nav);
     }
 

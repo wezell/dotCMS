@@ -49,6 +49,7 @@ public class OSGIResource  {
             "slf4j.api",
             "jcl.over.slf4j",
             "com.dotcms.tika",
+            "com.dotcms.samlbundle",
             "org.apache.felix.http.api",
             "org.apache.felix.configadmin"
     );
@@ -68,7 +69,13 @@ public class OSGIResource  {
     @Produces (MediaType.APPLICATION_JSON)
     public Response getInstalledBundles (@Context HttpServletRequest request, @Context final HttpServletResponse response, @PathParam ("params") String params ) throws JSONException {
 
-        InitDataObject initData = webResource.init(params, request, response, true, null);
+        final InitDataObject initData = new WebResource.InitBuilder(webResource)
+                .requiredBackendUser(true)
+                .requiredFrontendUser(false)
+                .requestAndResponse(request, response)
+                .params(params)
+                .rejectWhenNoUser(true)
+                .init();
 
         //Creating an utility response object
         ResourceResponse responseResource = new ResourceResponse( initData.getParamsMap() );

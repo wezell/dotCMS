@@ -1,20 +1,27 @@
 package com.dotmarketing.portlets.folders.business;
 
+import static org.junit.Assert.assertEquals;
+
 import com.dotcms.contenttype.business.ContentTypeAPI;
 import com.dotcms.contenttype.model.type.BaseContentType;
 import com.dotcms.contenttype.model.type.ContentType;
 import com.dotcms.contenttype.model.type.ContentTypeBuilder;
 import com.dotcms.datagen.ContainerDataGen;
+import com.dotcms.datagen.FolderDataGen;
+import com.dotcms.datagen.SiteDataGen;
 import com.dotcms.datagen.TemplateDataGen;
 import com.dotcms.datagen.TestDataUtils;
+import com.dotcms.datagen.UserDataGen;
 import com.dotcms.util.IntegrationTestInitService;
 import com.dotmarketing.beans.ContainerStructure;
 import com.dotmarketing.beans.Host;
 import com.dotmarketing.beans.Identifier;
 import com.dotmarketing.beans.MultiTree;
+import com.dotmarketing.beans.Permission;
 import com.dotmarketing.business.APILocator;
 import com.dotmarketing.business.CacheLocator;
 import com.dotmarketing.business.IdentifierAPI;
+import com.dotmarketing.business.PermissionAPI;
 import com.dotmarketing.business.UserAPI;
 import com.dotmarketing.business.VersionableAPI;
 import com.dotmarketing.cache.FolderCache;
@@ -30,6 +37,7 @@ import com.dotmarketing.portlets.contentlet.model.Contentlet;
 import com.dotmarketing.portlets.contentlet.model.IndexPolicy;
 import com.dotmarketing.portlets.fileassets.business.FileAsset;
 import com.dotmarketing.portlets.fileassets.business.FileAssetAPI;
+import com.dotmarketing.portlets.folders.exception.InvalidFolderNameException;
 import com.dotmarketing.portlets.folders.model.Folder;
 import com.dotmarketing.portlets.htmlpageasset.business.HTMLPageAssetAPI;
 import com.dotmarketing.portlets.htmlpageasset.business.HTMLPageAssetAPIImpl;
@@ -45,7 +53,11 @@ import com.dotmarketing.util.InodeUtils;
 import com.dotmarketing.util.UtilMethods;
 import com.liferay.portal.model.User;
 import com.liferay.util.FileUtil;
+import com.tngtech.java.junit.dataprovider.DataProvider;
+import com.tngtech.java.junit.dataprovider.DataProviderRunner;
+import com.tngtech.java.junit.dataprovider.UseDataProvider;
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.Assert;
@@ -53,7 +65,9 @@ import org.junit.BeforeClass;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
+import org.junit.runner.RunWith;
 
+@RunWith(DataProviderRunner.class)
 public class FolderAPITest {//24 contentlets
 
 	private final static String LOGO_GIF_1 = "logo.gif";
@@ -77,10 +91,10 @@ public class FolderAPITest {//24 contentlets
 	private static long langId;
 
 	@BeforeClass
-    public static void prepare () throws Exception {
+	public static void prepare() throws Exception {
 
-        //Setting web app environment
-        IntegrationTestInitService.getInstance().init();
+		//Setting web app environment
+		IntegrationTestInitService.getInstance().init();
 		identifierAPI    = APILocator.getIdentifierAPI();
 		userAPI          = APILocator.getUserAPI();
 		hostAPI          = APILocator.getHostAPI();
@@ -96,13 +110,13 @@ public class FolderAPITest {//24 contentlets
 		templateAPI      = APILocator.getTemplateAPI();
 
 		user   = userAPI.getSystemUser();
-		host   = hostAPI.findDefaultHost(user, false);
+		host = new SiteDataGen().nextPersisted();
 		langId = languageAPI.getDefaultLanguage().getId();
 		fc     = CacheLocator.getFolderCache();
 
 		contentTypeAPI   = APILocator.getContentTypeAPI(user);
 
-    }
+	}
 
 	@Rule
 	public TemporaryFolder testFolder = new TemporaryFolder();
@@ -126,10 +140,10 @@ public class FolderAPITest {//24 contentlets
 
 		// make sure the rename is properly propagated on children (that's done in a db trigger)
 
-        final Identifier ident  = identifierAPI.loadFromDb(ftest.getVersionId());
-        final Identifier ident1 = identifierAPI.loadFromDb(ftest1.getVersionId());
-        final Identifier ident2 = identifierAPI.loadFromDb(ftest2.getVersionId());
-        final Identifier ident3 = identifierAPI.loadFromDb(ftest3.getVersionId());
+		final Identifier ident = identifierAPI.loadFromDb(ftest.getVersionId());
+		final Identifier ident1 = identifierAPI.loadFromDb(ftest1.getVersionId());
+		final Identifier ident2 = identifierAPI.loadFromDb(ftest2.getVersionId());
+		final Identifier ident3 = identifierAPI.loadFromDb(ftest3.getVersionId());
 
 		Assert.assertTrue(ident.getAssetName().startsWith("folderTestXX"));
 		Assert.assertEquals(ident.getPath(),ident1.getParentPath());
@@ -153,7 +167,7 @@ public class FolderAPITest {//24 contentlets
 
 		//adding page
 		final String page0Name ="page0";
-        final Template template = new TemplateDataGen().nextPersisted();
+		final Template template = new TemplateDataGen().nextPersisted();
 
 		Contentlet contentAsset1 = new Contentlet();
 		contentAsset1.setStructureInode(HTMLPageAssetAPIImpl.DEFAULT_HTMLPAGE_ASSET_STRUCTURE_INODE);
@@ -217,12 +231,9 @@ public class FolderAPITest {//24 contentlets
 		Assert.assertEquals(3, pages.size());
 		Assert.assertTrue(pages.stream().anyMatch(page -> page.getName().equals(page0Name)));
 
-		contentletAPI.archive(contentAsset1,user,false);
-		contentletAPI.archive(contentAsset2,user,false);
-		contentletAPI.archive(contentAsset4,user,false);
-		contentletAPI.delete(contentAsset1,user,false);
-		contentletAPI.delete(contentAsset2,user,false);
-		contentletAPI.delete(contentAsset4,user,false);
+		contentletAPI.destroy(contentAsset1, user, false);
+		contentletAPI.destroy(contentAsset2, user, false);
+		contentletAPI.destroy(contentAsset4, user, false);
 	}
 
 	/**
@@ -232,7 +243,6 @@ public class FolderAPITest {//24 contentlets
 	@Test
 	public void move() throws Exception {
 
-
 		//create folders and assets
 		Folder ftest = folderAPI
 				.createFolders("/folderMoveSourceTest"+System.currentTimeMillis(), host, user, false);
@@ -241,7 +251,7 @@ public class FolderAPITest {//24 contentlets
 
 		//adding page
 		final String page0Str ="page0";
-        Template template = new TemplateDataGen().nextPersisted();
+		Template template = new TemplateDataGen().nextPersisted();
 
 		Contentlet contentAsset1=new Contentlet();
 		contentAsset1.setStructureInode(HTMLPageAssetAPIImpl.DEFAULT_HTMLPAGE_ASSET_STRUCTURE_INODE);
@@ -258,7 +268,7 @@ public class FolderAPITest {//24 contentlets
 
 		/*adding menu link*/
 		final String linkStr="link";
-  		final Link link = new Link();
+		final Link link = new Link();
 		link.setTitle(linkStr);
 		link.setFriendlyName(linkStr);
 		link.setParent(ftest1.getInode());
@@ -268,7 +278,7 @@ public class FolderAPITest {//24 contentlets
 		Contentlet pageContentlet = TestDataUtils.getPageContent(true, langId);
 		IHTMLPage page = APILocator.getHTMLPageAssetAPI().fromContentlet(pageContentlet);
 
-  		Identifier internalLinkIdentifier = identifierAPI.find(page.getIdentifier());
+		Identifier internalLinkIdentifier = identifierAPI.find(page.getIdentifier());
 		link.setLinkType(Link.LinkType.INTERNAL.toString());
 		link.setInternalLinkIdentifier(internalLinkIdentifier.getId());
 		link.setProtocal("http://");
@@ -302,7 +312,7 @@ public class FolderAPITest {//24 contentlets
 
 		/*Adding menu link*/
 		final String linkStr2="link2";
-  		final Link link2 = new Link();
+		final Link link2 = new Link();
 		link2.setTitle(linkStr2);
 		link2.setFriendlyName(linkStr2);
 		link2.setParent(ftest2.getInode());
@@ -312,7 +322,7 @@ public class FolderAPITest {//24 contentlets
 		pageContentlet = TestDataUtils.getPageContent(true, langId);
 		page = APILocator.getHTMLPageAssetAPI().fromContentlet(pageContentlet);
 
-  		internalLinkIdentifier = identifierAPI.findFromInode(page.getIdentifier());
+		internalLinkIdentifier = identifierAPI.findFromInode(page.getIdentifier());
 		link2.setLinkType(Link.LinkType.INTERNAL.toString());
 		link2.setInternalLinkIdentifier(internalLinkIdentifier.getId());
 		link2.setProtocal("http://");
@@ -327,8 +337,8 @@ public class FolderAPITest {//24 contentlets
 		versionableAPI.setLive(link2);
 
 		/*Adding file asset to folder */
-        final String fileTitle = "testMove.txt";
-        final File destFile = testFolder.newFile(fileTitle);
+		final String fileTitle = "testMove.txt";
+		final File destFile = testFolder.newFile(fileTitle);
 		FileUtil.write(destFile, "helloworld");
 
 		Contentlet contentAsset3=new Contentlet();
@@ -381,7 +391,6 @@ public class FolderAPITest {//24 contentlets
 		final MultiTree m = new MultiTree(contentAsset4.getIdentifier(), container.getIdentifier(), contentAsset2.getIdentifier());
 		APILocator.getMultiTreeAPI().saveMultiTree(m);
 
-
 		final Folder destinationftest = folderAPI
 				.createFolders("/folderMoveDestinationTest"+System.currentTimeMillis(), host, user, false);
 
@@ -424,19 +433,6 @@ public class FolderAPITest {//24 contentlets
 
 		final List<MultiTree> mt= APILocator.getMultiTreeAPI().getMultiTrees(pages.get(0).getIdentifier());
 		Assert.assertTrue(mt.size() ==1 && mt.get(0).getParent2().equals(container.getIdentifier()) && mt.get(0).getChild().equals(contentAsset2.getIdentifier()) );
-
-		contentletAPI.archive(contentAsset1,user,false);
-		contentletAPI.archive(contentAsset2,user,false);
-		contentletAPI.archive(contentAsset3,user,false);
-		contentletAPI.archive(contentAsset4,user,false);
-		contentletAPI.archive(contentAsset5,user,false);
-		contentletAPI.delete(contentAsset1,user,false);
-		contentletAPI.delete(contentAsset2,user,false);
-		contentletAPI.delete(contentAsset3,user,false);
-		contentletAPI.delete(contentAsset4,user,false);
-		contentletAPI.delete(contentAsset5,user,false);
-
-
 	}
 
 	/**
@@ -455,7 +451,7 @@ public class FolderAPITest {//24 contentlets
 				.createFolders("/folderCopySourceTest"+System.currentTimeMillis(), host, user, false);
 		//adding page
 		final String pageStr ="mypage";
-        Template template = new TemplateDataGen().nextPersisted();
+		Template template = new TemplateDataGen().nextPersisted();
 
 		Contentlet contentAsset1=new Contentlet();
 		contentAsset1.setStructureInode(HTMLPageAssetAPIImpl.DEFAULT_HTMLPAGE_ASSET_STRUCTURE_INODE);
@@ -475,7 +471,7 @@ public class FolderAPITest {//24 contentlets
 
 		IHTMLPage page = htmlPageAssetAPI
 				.getPageByPath(ftest.getPath()+pageStr, host, languageAPI
-				.getDefaultLanguage().getId(), false);
+						.getDefaultLanguage().getId(), false);
 		Assert.assertTrue(page != null && page.getTitle().contains(pageStr));
 		page = htmlPageAssetAPI
 				.getPageByPath(ftest.getPath()+pageStr+"_COPY", host, langId, false);
@@ -542,7 +538,7 @@ public class FolderAPITest {//24 contentlets
 
 		/*Adding a link*/
 		final String linkStr="link1";
-  		Link link = new Link();
+		Link link = new Link();
 		link.setTitle(linkStr);
 		link.setFriendlyName(linkStr);
 		link.setParent(ftest1.getInode());
@@ -552,7 +548,7 @@ public class FolderAPITest {//24 contentlets
 		Contentlet pageContentlet = TestDataUtils.getPageContent(true, langId);
 		page = APILocator.getHTMLPageAssetAPI().fromContentlet(pageContentlet);
 
-  		Identifier internalLinkIdentifier = identifierAPI.findFromInode(page.getIdentifier());
+		Identifier internalLinkIdentifier = identifierAPI.findFromInode(page.getIdentifier());
 		link.setLinkType(Link.LinkType.INTERNAL.toString());
 		link.setInternalLinkIdentifier(internalLinkIdentifier.getId());
 		link.setProtocal("http://");
@@ -598,7 +594,7 @@ public class FolderAPITest {//24 contentlets
 
 		/*Adding page and menu link to folder fcopy3*/
 		String linkStr2="link2";
-  		Link link2 = new Link();
+		Link link2 = new Link();
 		link2.setTitle(linkStr2);
 		link2.setFriendlyName(linkStr2);
 		link2.setParent(ftest3.getInode());
@@ -608,7 +604,7 @@ public class FolderAPITest {//24 contentlets
 		pageContentlet = TestDataUtils.getPageContent(true, langId);
 		page = APILocator.getHTMLPageAssetAPI().fromContentlet(pageContentlet);
 
-  		internalLinkIdentifier = identifierAPI.findFromInode(page.getIdentifier());
+		internalLinkIdentifier = identifierAPI.findFromInode(page.getIdentifier());
 		link2.setLinkType(Link.LinkType.INTERNAL.toString());
 		link2.setInternalLinkIdentifier(internalLinkIdentifier.getId());
 		link2.setProtocal("http://");
@@ -705,42 +701,6 @@ public class FolderAPITest {//24 contentlets
 		mt= APILocator.getMultiTreeAPI().getMultiTrees(page.getIdentifier());
 		Assert.assertTrue(mt.size() ==1 && mt.get(0).getParent2().equals(container.getIdentifier()) && mt.get(0).getChild().equals(contentAsset8.getIdentifier()) );
 
-		for(Contentlet contentlet : folderAPI.getLiveContent(newftest1,user,false)){
-			contentletAPI.archive(contentlet,user,false);
-			contentletAPI.delete(contentlet,user,false);
-		}
-
-		for(Contentlet contentlet : folderAPI.getLiveContent(newftest2,user,false)){
-			contentletAPI.archive(contentlet,user,false);
-			contentletAPI.delete(contentlet,user,false);
-		}
-
-		for(Contentlet contentlet : folderAPI.getLiveContent(newftest3,user,false)){
-			contentletAPI.archive(contentlet,user,false);
-			contentletAPI.delete(contentlet,user,false);
-		}
-
-		contentletAPI.archive(contentAsset1,user,false);
-		contentletAPI.archive(contentAsset2,user,false);
-		contentletAPI.archive(contentAsset3,user,false);
-		contentletAPI.archive(contentAsset4,user,false);
-		contentletAPI.archive(contentAsset5,user,false);
-		contentletAPI.archive(contentAsset6,user,false);
-		contentletAPI.archive(contentAsset7,user,false);
-		contentletAPI.archive(contentAsset8,user,false);
-		contentletAPI.archive(contentAsset1Copy,user,false);
-
-
-		contentletAPI.delete(contentAsset1,user,false);
-		contentletAPI.delete(contentAsset2,user,false);
-		contentletAPI.delete(contentAsset3,user,false);
-		contentletAPI.delete(contentAsset4,user,false);
-		contentletAPI.delete(contentAsset5,user,false);
-		contentletAPI.delete(contentAsset6,user,false);
-		contentletAPI.delete(contentAsset7,user,false);
-		contentletAPI.delete(contentAsset8,user,false);
-		contentletAPI.delete(contentAsset1Copy,user,false);
-
 	}
 
 	/**
@@ -749,7 +709,7 @@ public class FolderAPITest {//24 contentlets
 	 */
 	@Test
 	public void delete() throws Exception {
-		final long langIdES= languageAPI.getLanguage("es", "ES").getId();
+		final long langIdES = TestDataUtils.getSpanishLanguage().getId();
 
 		final String folderPath = "/folderDeleteSourceTest"+System.currentTimeMillis();
 		final Folder ftest = folderAPI.createFolders(folderPath, host, user, false);
@@ -758,7 +718,7 @@ public class FolderAPITest {//24 contentlets
 
 		//adding page
 		String pageStr ="mypage";
-        Template template = new TemplateDataGen().nextPersisted();
+		Template template = new TemplateDataGen().nextPersisted();
 
 		/*create page content multilingual */
 		Contentlet contentAsset1=new Contentlet();
@@ -872,7 +832,15 @@ public class FolderAPITest {//24 contentlets
 
 	@Test
 	public void testFindSubFoldersByHost() throws DotDataException, DotSecurityException {
-		final List<Folder> folders = folderAPI.findSubFolders(host, false);
+		final Host newHost = new SiteDataGen().nextPersisted();
+		final String folderPath = "/folder"+System.currentTimeMillis();
+
+		final Folder folder = folderAPI.createFolders(folderPath, newHost, user, false);
+		folder.setOwner("folder's owner");
+
+		folderAPI.save(folder, user, false);
+
+		final List<Folder> folders = folderAPI.findSubFolders(newHost, false);
 
 		Assert.assertNotNull(folders);
 		Assert.assertFalse(folders.isEmpty());
@@ -880,7 +848,15 @@ public class FolderAPITest {//24 contentlets
 
 	@Test
 	public void testFindFoldersByHost() throws DotDataException, DotSecurityException {
-		final List<Folder> folders = folderAPI.findFoldersByHost(host, user, false);
+		final Host newHost = new SiteDataGen().nextPersisted();
+		final String folderPath = "/folder"+System.currentTimeMillis();
+
+		final Folder folder = folderAPI.createFolders(folderPath, newHost, user, false);
+		folder.setOwner("folder's owner");
+
+		folderAPI.save(folder, user, false);
+
+		final List<Folder> folders = folderAPI.findFoldersByHost(newHost, user, false);
 
 		Assert.assertNotNull(folders);
 		Assert.assertFalse(folders.isEmpty());
@@ -897,36 +873,6 @@ public class FolderAPITest {//24 contentlets
 
 		Assert.assertNotNull(folders);
 		Assert.assertFalse(folders.isEmpty());
-	}
-
-	@Test
-	public void testFindFolderByPath() throws DotDataException, DotSecurityException {
-		String folderPath;
-		Folder folder;
-
-		folder     = null;
-		folderPath = "/folder"+System.currentTimeMillis();
-
-		try{
-			folder = folderAPI.createFolders(folderPath, host, user, false);
-			folder.setOwner("folder's owner");
-
-			folderAPI.save(folder, user, false);
-
-			fc.removeFolder(folder, identifierAPI.find(folder));
-			Folder result = folderAPI.findFolderByPath(folderPath, host, user,false);
-
-			Assert.assertNotNull(result);
-			Assert.assertEquals(folder.getInode(), result.getInode());
-
-			Assert.assertTrue(
-					result.getOwner() != null && result.getOwner().equals(folder.getOwner()));
-		}finally{
-
-			if (folder != null){
-				folderAPI.delete(folder, user, false);
-			}
-		}
 	}
 
 	@Test
@@ -968,131 +914,440 @@ public class FolderAPITest {//24 contentlets
 
 	@Test
 	public void testGetLinks() throws Exception {
-		Container container     = null;
-		Contentlet contentAsset = null;
-		Folder ftest            = null;
-		Link link               = null;
-		Template template       = null;
 
-		Host host;
-		Identifier internalLinkIdentifier;
-		long id;
 		String containerName, linkStr, page0Str, userId;
-		StringBuffer myURL;
 
-		host    = hostAPI.findDefaultHost(user, false);
-		id      = System.currentTimeMillis();
+		Host host = hostAPI.findDefaultHost(user, false);
+		long id = System.currentTimeMillis();
 		linkStr = "link" + id;
-		userId  = user.getUserId();
+		userId = user.getUserId();
+
+		final ContentType widgetContentType = TestDataUtils.getWidgetLikeContentType();
+
+		//Create new folder
+		Folder ftest = folderAPI.createFolders("/folderTest" + id, host, user, false);
+		ftest.setOwner(userId);
+		folderAPI.save(ftest, user, false);
+
+		/**
+		 * Create new container
+		 */
+		Container container = new Container();
+		containerName = "container" + id;
+
+		container.setFriendlyName(containerName);
+		container.setTitle(containerName);
+		container.setOwner(userId);
+		container.setMaxContentlets(5);
+		container.setPreLoop("preloop code");
+		container.setPostLoop("postloop code");
+
+		List<ContainerStructure> csList = new ArrayList<ContainerStructure>();
+		ContainerStructure cs = new ContainerStructure();
+		cs.setStructureId(widgetContentType.inode());
+		cs.setCode("<div><h3>content $!{title}</h3><p>$!{body}</p></div>");
+		csList.add(cs);
+		container = containerAPI.save(container, csList, host, user, false);
+		PublishFactory.publishAsset(container, user, false, false);
+
+		/**
+		 * Create new template
+		 */
+		String templateBody = "<html><body> #parseContainer('" + container.getIdentifier()
+				+ "') </body></html>";
+		String templateTitle = "template" + id;
+
+		//Create template
+		Template template = new Template();
+		template.setTitle(templateTitle);
+		template.setBody(templateBody);
+		template.setOwner(user.getUserId());
+		template.setDrawedBody(templateBody);
+		template = templateAPI.saveTemplate(template, host, user, false);
+		PublishFactory.publishAsset(template, user, false, false);
+
+		//Create new page
+		page0Str = "page" + id;
+		Contentlet contentAsset = new Contentlet();
+		contentAsset
+				.setContentTypeId(HTMLPageAssetAPIImpl.DEFAULT_HTMLPAGE_ASSET_STRUCTURE_INODE);
+		contentAsset.setHost(host.getIdentifier());
+		contentAsset.setProperty(HTMLPageAssetAPIImpl.FRIENDLY_NAME_FIELD, page0Str);
+		contentAsset.setProperty(HTMLPageAssetAPIImpl.URL_FIELD, page0Str);
+		contentAsset.setProperty(HTMLPageAssetAPIImpl.TITLE_FIELD, page0Str);
+		contentAsset.setProperty(HTMLPageAssetAPIImpl.CACHE_TTL_FIELD, "0");
+		contentAsset.setProperty(HTMLPageAssetAPIImpl.TEMPLATE_FIELD, template.getIdentifier());
+		contentAsset.setLanguageId(languageAPI.getDefaultLanguage().getId());
+		contentAsset.setFolder(ftest.getInode());
+		contentAsset = contentletAPI.checkin(contentAsset, user, false);
+		contentletAPI.publish(contentAsset, user, false);
+
+		Identifier internalLinkIdentifier = identifierAPI
+				.findFromInode(contentAsset.getIdentifier());
+
+		StringBuffer myURL = new StringBuffer();
+		if (InodeUtils.isSet(internalLinkIdentifier.getHostId())) {
+			myURL.append(host.getHostname());
+		}
+		myURL.append(internalLinkIdentifier.getURI());
+
+		Link link = new Link();
+		link.setTitle(linkStr);
+		link.setFriendlyName(linkStr);
+		link.setParent(ftest.getInode());
+		link.setTarget("_blank");
+		link.setOwner(userId);
+		link.setModUser(userId);
+		link.setLinkType(Link.LinkType.INTERNAL.toString());
+		link.setInternalLinkIdentifier(internalLinkIdentifier.getId());
+		link.setProtocal("http://");
+		link.setUrl(myURL.toString());
+		WebAssetFactory.createAsset(link, userId, ftest);
+
+		List<Link> links = folderAPI.getLinks(ftest, user, false);
+
+		Assert.assertNotNull(links);
+		Assert.assertFalse(links.isEmpty());
+		Assert.assertEquals(link.getIdentifier(), links.get(0).getIdentifier());
+		Assert.assertEquals(link.getInode(), links.get(0).getInode());
+	}
+
+	@DataProvider
+	public static Object[] reservedFolderNames() {
+		return FolderFactoryImpl.reservedFolderNames.toArray();
+	}
+
+	@Test(expected = InvalidFolderNameException.class)
+	@UseDataProvider("reservedFolderNames")
+	public void testSave_BlacklistedName_ShouldFail(final String reservedName)
+			throws DotDataException, DotSecurityException {
+		Identifier newIdentifier=null;
+		try {
+			final Folder invalidFolder = new FolderDataGen().name(reservedName).next();
+			newIdentifier = identifierAPI.createNew(invalidFolder, host);
+			invalidFolder.setIdentifier(newIdentifier.getId());
+			folderAPI.save(invalidFolder, APILocator.systemUser(), false);
+		} finally {
+			identifierAPI.delete(newIdentifier);
+		}
+	}
+
+	@UseDataProvider("reservedFolderNames")
+	public void testCopyToFolder_BlacklistedName_ShouldSucceed(final String reservedName)
+			throws DotDataException, DotSecurityException, IOException {
+
+		Identifier newIdentifier = null;
 
 		try {
-			//Create new folder
-			ftest = folderAPI.createFolders("/folderTest" + id, host, user, false);
-			ftest.setOwner(userId);
-			folderAPI.save(ftest, user, false);
+			final Folder invalidFolder = new FolderDataGen().name(reservedName).next();
+			newIdentifier = identifierAPI.createNew(invalidFolder, host);
+			invalidFolder.setIdentifier(newIdentifier.getId());
 
-			/**
-			 * Create new container
-			 */
-			container     = new Container();
-			containerName = "container" + id;
+			final Folder newFolder = new FolderDataGen().nextPersisted();
 
-			container.setFriendlyName(containerName);
-			container.setTitle(containerName);
-			container.setOwner(userId);
-			container.setMaxContentlets(5);
-			container.setPreLoop("preloop code");
-			container.setPostLoop("postloop code");
-
-			List<ContainerStructure> csList = new ArrayList<ContainerStructure>();
-			ContainerStructure cs = new ContainerStructure();
-			cs.setStructureId(
-					CacheLocator.getContentTypeCache().getStructureByVelocityVarName("SimpleWidget")
-							.getInode());
-			cs.setCode("<div><h3>content $!{title}</h3><p>$!{body}</p></div>");
-			csList.add(cs);
-			container = containerAPI.save(container, csList, host, user, false);
-			PublishFactory.publishAsset(container, user, false, false);
-
-			/**
-			 * Create new template
-			 */
-			String templateBody  = "<html><body> #parseContainer('" + container.getIdentifier()
-					+ "') </body></html>";
-			String templateTitle = "template" + id;
-
-			//Create template
-			template = new Template();
-			template.setTitle(templateTitle);
-			template.setBody(templateBody);
-			template.setOwner(user.getUserId());
-			template.setDrawedBody(templateBody);
-			template = templateAPI.saveTemplate(template, host, user, false);
-			PublishFactory.publishAsset(template, user, false, false);
-
-			//Create new page
-			page0Str     = "page" + id;
-			contentAsset = new Contentlet();
-			contentAsset
-					.setContentTypeId(HTMLPageAssetAPIImpl.DEFAULT_HTMLPAGE_ASSET_STRUCTURE_INODE);
-			contentAsset.setHost(host.getIdentifier());
-			contentAsset.setProperty(HTMLPageAssetAPIImpl.FRIENDLY_NAME_FIELD, page0Str);
-			contentAsset.setProperty(HTMLPageAssetAPIImpl.URL_FIELD, page0Str);
-			contentAsset.setProperty(HTMLPageAssetAPIImpl.TITLE_FIELD, page0Str);
-			contentAsset.setProperty(HTMLPageAssetAPIImpl.CACHE_TTL_FIELD, "0");
-			contentAsset.setProperty(HTMLPageAssetAPIImpl.TEMPLATE_FIELD, template.getIdentifier());
-			contentAsset.setLanguageId(languageAPI.getDefaultLanguage().getId());
-			contentAsset.setFolder(ftest.getInode());
-			contentAsset = contentletAPI.checkin(contentAsset, user, false);
-			contentletAPI.publish(contentAsset, user, false);
-
-			internalLinkIdentifier = identifierAPI.findFromInode(contentAsset.getIdentifier());
-
-			myURL = new StringBuffer();
-			if (InodeUtils.isSet(internalLinkIdentifier.getHostId())) {
-				myURL.append(host.getHostname());
-			}
-			myURL.append(internalLinkIdentifier.getURI());
-
-			link = new Link();
-			link.setTitle(linkStr);
-			link.setFriendlyName(linkStr);
-			link.setParent(ftest.getInode());
-			link.setTarget("_blank");
-			link.setOwner(userId);
-			link.setModUser(userId);
-			link.setLinkType(Link.LinkType.INTERNAL.toString());
-			link.setInternalLinkIdentifier(internalLinkIdentifier.getId());
-			link.setProtocal("http://");
-			link.setUrl(myURL.toString());
-			WebAssetFactory.createAsset(link, userId, ftest);
-
-			List<Link> links = folderAPI.getLinks(ftest, user, false);
-
-			Assert.assertNotNull(links);
-			Assert.assertFalse(links.isEmpty());
-			Assert.assertEquals(link.getIdentifier(), links.get(0).getIdentifier());
-			Assert.assertEquals(link.getInode(), links.get(0).getInode());
+			folderAPI.copy(invalidFolder, newFolder, APILocator.systemUser(), false);
 		} finally {
-
-			if (contentAsset != null && contentAsset.getInode() != null) {
-				contentletAPI.archive(contentAsset, user, false);
-				contentletAPI.delete(contentAsset, user, false);
-			}
-
-			if (ftest != null) {
-				folderAPI.delete(ftest, user, false);
-			}
-
-			if (container != null && container.getInode() != null) {
-				containerAPI.delete(container, user, false);
-			}
-
-			if (template != null && template.getInode() != null) {
-				templateAPI.delete(template, user, false);
-			}
-
+			identifierAPI.delete(newIdentifier);
 		}
-
 	}
+
+	@Test(expected = InvalidFolderNameException.class)
+	@UseDataProvider("reservedFolderNames")
+	public void testCopyToHost_BlacklistedName_ShouldFail(final String reservedName)
+			throws DotDataException, DotSecurityException, IOException {
+		final Folder invalidFolder = new FolderDataGen().name(reservedName).next();
+		final Identifier newIdentifier = identifierAPI.createNew(invalidFolder, host);
+		invalidFolder.setIdentifier(newIdentifier.getId());
+		final Host newHost = new SiteDataGen().nextPersisted();
+		folderAPI.copy(invalidFolder, newHost, APILocator.systemUser(), false);
+	}
+
+	@Test(expected = InvalidFolderNameException.class)
+	@UseDataProvider("reservedFolderNames")
+	public void testRename_BlacklistedName_ShouldFail(final String reservedName)
+			throws DotDataException, DotSecurityException {
+
+		Identifier newIdentifier = null;
+
+		try {
+			final Folder folder = new FolderDataGen()
+					.name("testFolderRename" + System.currentTimeMillis()).next();
+			newIdentifier = identifierAPI.createNew(folder, host);
+			folder.setIdentifier(newIdentifier.getId());
+			folderAPI.save(folder, APILocator.systemUser(), false);
+
+			folderAPI.renameFolder(folder, reservedName, user, false);
+		} finally {
+			if(newIdentifier!=null) {
+				identifierAPI.delete(newIdentifier);
+			}
+		}
+	}
+
+	@Test(expected = InvalidFolderNameException.class)
+	@UseDataProvider("reservedFolderNames")
+	public void testCreateFolders_AtRootLevel_BlacklistedName_ShouldFail(final String reservedName)
+			throws DotDataException, DotSecurityException {
+		final String foldersString = "/" + reservedName;
+		folderAPI.createFolders(foldersString,host,user,false);
+	}
+
+	@Test(expected = InvalidFolderNameException.class)
+	@UseDataProvider("reservedFolderNames")
+	public void testSave_BlacklistedName_NotAtRootLevel_ShouldSucceed(final String reservedName)
+			throws DotDataException, DotSecurityException {
+		Identifier newIdentifier = null;
+
+		try {
+			final Folder parentFolder = new FolderDataGen().next();
+			final Folder invalidFolder = new FolderDataGen().parent(parentFolder)
+					.name(reservedName).next();
+			newIdentifier = identifierAPI.createNew(invalidFolder, host);
+			invalidFolder.setIdentifier(newIdentifier.getId());
+			folderAPI.save(invalidFolder, APILocator.systemUser(), false);
+		} finally {
+			identifierAPI.delete(newIdentifier);
+		}
+	}
+
+	@Test(expected = InvalidFolderNameException.class)
+	@UseDataProvider("reservedFolderNames")
+	public void testRename_BlacklistedName_NotAtRootLevel_ShouldSucceed(final String reservedName)
+			throws DotDataException, DotSecurityException {
+		Identifier newIdentifier = null;
+
+		try {
+			final Folder parentFolder = new FolderDataGen().next();
+			final Folder folder = new FolderDataGen().parent(parentFolder)
+					.name("testFolderRename" + System.currentTimeMillis()).next();
+			newIdentifier = identifierAPI.createNew(folder, host);
+			folder.setIdentifier(newIdentifier.getId());
+			folderAPI.save(folder, APILocator.systemUser(), false);
+
+			folderAPI.renameFolder(folder,reservedName,user,false);
+		} finally {
+			identifierAPI.delete(newIdentifier);
+		}
+	}
+
+	@UseDataProvider("reservedFolderNames")
+	public void testCreateFolders_NotAtRootLevel_BlacklistedName_ShouldSucceed(final String reservedName)
+			throws DotDataException, DotSecurityException {
+		Folder folder = null;
+		try {
+			final String foldersString = "/testFolders/" + reservedName;
+			folder = folderAPI.createFolders(foldersString, host, user, false);
+		} finally {
+			if(folder!=null) {
+				APILocator.getFolderAPI().delete(folder, APILocator.systemUser(), false);
+			}
+		}
+	}
+
+	/**
+	 * Method to test: findFolderByPath in the FolderAPI
+	 * Given Scenario: Create a folder and get the folder using the path and the admin user.
+	 * ExpectedResult: The folder created.
+	 *
+	 */
+	@Test
+	public void test_findFolderByPath_Admin_success() throws DotDataException, DotSecurityException {
+		final Host newHost = new SiteDataGen().nextPersisted();
+		final String folderPath = "/folder"+System.currentTimeMillis();
+
+		final Folder folder = folderAPI.createFolders(folderPath, newHost, user, false);
+		folder.setOwner("folder's owner");
+
+		folderAPI.save(folder, user, false);
+
+		fc.removeFolder(folder, identifierAPI.find(folder));
+		final Folder folderByPath = folderAPI.findFolderByPath(folderPath, newHost, user,false);
+
+		Assert.assertNotNull(folderByPath);
+		Assert.assertEquals(folder.getInode(), folderByPath.getInode());
+		Assert.assertEquals(folder.getOwner(), folderByPath.getOwner());
+	}
+
+	/**
+	 * Method to test: findFolderByPath in the FolderAPI
+	 * Given Scenario: call the findFolderByPath but the host is null
+	 * ExpectedResult: null
+	 *
+	 */
+	@Test
+	public void test_findFolderByPath_Admin_HostisNull_returnNullFolder() throws DotDataException, DotSecurityException {
+
+		final Folder folderByPath = folderAPI.findFolderByPath("/", (String) null, user,false);
+
+		Assert.assertNull(folderByPath);
+	}
+
+	/**
+	 * Method to test: findFolderByPath in the FolderAPI
+	 * Given Scenario: call the findFolderByPath but the path is null
+	 * ExpectedResult: null
+	 *
+	 */
+	@Test
+	public void test_findFolderByPath_Admin_PathisNull_returnNullFolder() throws DotDataException, DotSecurityException {
+
+		final Folder folderByPath = folderAPI.findFolderByPath(null, host, user,false);
+
+		Assert.assertNull(folderByPath);
+	}
+
+	/**
+	 * Method to test: findFolderByPath in the FolderAPI
+	 * Given Scenario: Create a folder using the admin user, now using a limited user try to get
+	 * the created folder by path, but the user does not have permissions over the host
+	 * ExpectedResult: DotSecurityException.class, since the user does not have permissions over the host
+	 *
+	 */
+	@Test (expected = DotSecurityException.class)
+	public void test_findFolderByPath_UserNoPermissionsOverHost_returnDotSecurityException() throws DotDataException, DotSecurityException {
+		final Host newHost = new SiteDataGen().nextPersisted();
+		final long currentTime = System.currentTimeMillis();
+		final String folderPath = "/folder"+currentTime;
+
+		final Folder folder = folderAPI.createFolders(folderPath, newHost, user, false);
+		folder.setOwner("folder's owner");
+
+		folderAPI.save(folder, user, false);
+		fc.removeFolder(folder, identifierAPI.find(folder));
+
+		final User limitedUser = new UserDataGen().nextPersisted();
+
+		folderAPI.findFolderByPath(folderPath, newHost, limitedUser,false);
+	}
+
+	/**
+	 * Method to test: findFolderByPath in the FolderAPI
+	 * Given Scenario: Create a folder using the admin user, now using a limited user try to get
+	 * the created folder by path, but the user does not have permissions over the folder
+	 * ExpectedResult: DotSecurityException.class, since the user does not have permissions over the folder
+	 *
+	 */
+	@Test (expected = DotSecurityException.class)
+	public void test_findFolderByPath_UserNoPermissionsOverFolder_returnDotSecurityException() throws DotDataException, DotSecurityException {
+		final Host newHost = new SiteDataGen().nextPersisted();
+		final long currentTime = System.currentTimeMillis();
+		final String folderPath = "/folder"+currentTime;
+
+		final Folder folder = folderAPI.createFolders(folderPath, newHost, user, false);
+		folder.setOwner("folder's owner");
+
+		folderAPI.save(folder, user, false);
+		fc.removeFolder(folder, identifierAPI.find(folder));
+
+		final User limitedUser = new UserDataGen().nextPersisted();
+
+		//Give Permissions Over the Host
+		final Permission permissions = new Permission(PermissionAPI.INDIVIDUAL_PERMISSION_TYPE,
+				newHost.getPermissionId(),
+				APILocator.getRoleAPI().loadRoleByKey(limitedUser.getUserId()).getId(),
+				PermissionAPI.PERMISSION_READ, true);
+		APILocator.getPermissionAPI().save(permissions, newHost, user, false);
+
+		folderAPI.findFolderByPath(folderPath, newHost, limitedUser,false);
+	}
+
+	/**
+	 * Method to test: findFolderByPath in the FolderAPI
+	 * Given Scenario: Create a folder using the admin user, now using a limited user try to get
+	 * the created folder by path, user has permissions over the folder and the host
+	 * ExpectedResult: the requested folder
+	 *
+	 */
+	@Test
+	public void test_findFolderByPath_UserWithPermissionsOverFolderAndHost_success() throws DotDataException, DotSecurityException {
+		final Host newHost = new SiteDataGen().nextPersisted();
+		final long currentTime = System.currentTimeMillis();
+		final String folderPath = "/folder"+currentTime;
+
+		final Folder folder = folderAPI.createFolders(folderPath, newHost, user, false);
+		folder.setOwner("folder's owner");
+
+		folderAPI.save(folder, user, false);
+		fc.removeFolder(folder, identifierAPI.find(folder));
+
+		final User limitedUser = new UserDataGen().nextPersisted();
+
+		//Give Permissions Over the Host
+		Permission permissions = new Permission(PermissionAPI.INDIVIDUAL_PERMISSION_TYPE,
+				newHost.getPermissionId(),
+				APILocator.getRoleAPI().loadRoleByKey(limitedUser.getUserId()).getId(),
+				PermissionAPI.PERMISSION_READ, true);
+		APILocator.getPermissionAPI().save(permissions, newHost, user, false);
+		//Give Permissions Over the Folder
+		permissions = new Permission(PermissionAPI.INDIVIDUAL_PERMISSION_TYPE,
+				folder.getPermissionId(),
+				APILocator.getRoleAPI().loadRoleByKey(limitedUser.getUserId()).getId(),
+				PermissionAPI.PERMISSION_READ, true);
+		APILocator.getPermissionAPI().save(permissions, folder, user, false);
+
+		final Folder folderByPath = folderAPI.findFolderByPath(folderPath, newHost, limitedUser,false);
+
+		Assert.assertNotNull(folderByPath);
+		Assert.assertEquals(folder.getInode(), folderByPath.getInode());
+		Assert.assertEquals(folder.getOwner(), folderByPath.getOwner());
+	}
+
+	
+	
+    /**
+     * this method tests that when you create a folder with a default file type and then create folders
+     * underneith it, that the children folders inherit the parent's default file type. This is
+     * especially used when creating folders via webdav
+     * 
+     * @throws DotDataException
+     * @throws DotSecurityException
+     */
+    @Test
+    public void test_folders_inherit_the_filetypes_of_their_parents() throws DotDataException, DotSecurityException {
+        final Host newHost = new SiteDataGen().nextPersisted();
+        final long currentTime = System.currentTimeMillis();
+
+        final ContentType fileAssetType = contentTypeAPI.find(FileAssetAPI.DEFAULT_FILE_ASSET_STRUCTURE_VELOCITY_VAR_NAME);
+        ContentType newFileAssetType = ContentTypeBuilder
+                        .builder(fileAssetType)
+                        .id(null)
+                        .variable("fileAsset"  + currentTime)
+                        .name("fileAsset"  + currentTime)
+                        .build();
+        
+        newFileAssetType =  contentTypeAPI.save(newFileAssetType);
+        
+
+        
+        assertEquals(newFileAssetType.variable(),"fileAsset"  + currentTime);
+        assert(newFileAssetType.id()!=null);
+        
+        final Folder parentFolder = new FolderDataGen().defaultFileType(newFileAssetType.id()).site(newHost).nextPersisted();
+        assertEquals(parentFolder.getDefaultFileType(), newFileAssetType.id());
+        
+        
+        final String folderPath = parentFolder.getPath() + "folder1/folder2/folder3";
+
+        folderAPI.createFolders(folderPath, newHost, user, false);
+
+        // /path/folder1
+        Folder folder1 = folderAPI.findFolderByPath(parentFolder.getPath() + "/folder1", newHost, user, false);
+        assert(folder1!=null);
+        assertEquals(folder1.getDefaultFileType(), newFileAssetType.id());
+        
+        // /path/folder2
+        Folder folder2 = folderAPI.findFolderByPath(parentFolder.getPath() + "/folder1/folder2", newHost, user, false);
+        assert(folder2!=null);
+        assertEquals(folder2.getDefaultFileType(), newFileAssetType.id());
+        
+        // /path/folder3
+        Folder folder3 = folderAPI.findFolderByPath(parentFolder.getPath() + "/folder1/folder2/folder3", newHost, user, false);
+        assert(folder3!=null);
+        assertEquals(folder3.getDefaultFileType(), newFileAssetType.id());        
+    }
+	
+	
+	
+	
 }
+

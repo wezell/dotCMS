@@ -5,6 +5,7 @@ import com.dotmarketing.common.db.DotConnect;
 import com.dotmarketing.db.DbConnectionFactory;
 import com.dotmarketing.db.HibernateUtil;
 import com.dotmarketing.exception.DotDataException;
+import com.dotmarketing.exception.DotHibernateException;
 import com.dotmarketing.util.AdminLogger;
 import com.dotmarketing.util.InodeUtils;
 import com.dotmarketing.util.Logger;
@@ -19,6 +20,7 @@ import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
 import org.apache.commons.beanutils.BeanUtils;
@@ -124,7 +126,7 @@ public class RoleFactoryImpl extends RoleFactory {
 					rolesToProcess.add(r);
 				}
 
-				if(APILocator.getUserAPI().getAnonymousUser().getUserId().equals(userId)
+				if(UserAPI.CMS_ANON_USER_ID.equals(userId)
 						&& !rolesToProcess.contains(APILocator.getRoleAPI().loadCMSAnonymousRole())){
 					rolesToProcess.add(APILocator.getRoleAPI().loadCMSAnonymousRole());
 				}
@@ -229,11 +231,13 @@ public class RoleFactoryImpl extends RoleFactory {
 
 	@Override
 	protected void addRoleToUser(Role role, User user) throws DotDataException {
-		UsersRoles ur = new UsersRoles();
-		ur.setRoleId(role.getId());
-		ur.setUserId(user.getUserId());
-		HibernateUtil.save(ur);
-		rc.remove(user.getUserId());
+
+  		UsersRoles ur = new UsersRoles();
+  		ur.setRoleId(role.getId());
+  		ur.setUserId(user.getUserId());
+  		HibernateUtil.save(ur);
+  		rc.remove(user.getUserId());
+
 	}
 
 	@Override
@@ -611,6 +615,22 @@ public class RoleFactoryImpl extends RoleFactory {
 		lr.setRoleId(role.getId());
 		HibernateUtil.save(lr);
 		rc.removeLayoutsOnRole(role.getId());
+	}
+
+	@Override
+	protected Optional<LayoutsRoles> findLayoutsRole(final Layout layout, final Role role) {
+
+		HibernateUtil hu = new HibernateUtil(LayoutsRoles.class);
+
+		try {
+
+			hu.setQuery("from " + LayoutsRoles.class.getName() + " where role_id = ? and layout_id = ?");
+			hu.setParam(role.getId());
+			hu.setParam(layout.getId());
+			return Optional.ofNullable ((LayoutsRoles)hu.load());
+		} catch (DotHibernateException e) {
+			return Optional.empty();
+		}
 	}
 
 	@Override

@@ -1,8 +1,10 @@
 package com.dotcms.contenttype.model.field;
 
+import com.dotcms.business.CloseDBIfOpened;
 import com.dotcms.contenttype.model.component.FieldFormRenderer;
 import com.dotcms.contenttype.model.component.FieldValueRenderer;
 import com.dotcms.repackage.com.google.common.base.Preconditions;
+import com.dotmarketing.util.Logger;
 import com.google.common.collect.ImmutableList;
 import com.dotmarketing.business.DotStateException;
 import com.dotmarketing.business.FactoryLocator;
@@ -60,23 +62,20 @@ import org.immutables.value.Value.Derived;
 })
 public abstract class Field implements FieldIf, Serializable {
 
-  public static int SORT_ORDER_DEFAULT_VALUE = -1;
+  public final static int SORT_ORDER_DEFAULT_VALUE = -1;
 
   @Value.Check
   public void check() {
 	Preconditions.checkArgument(StringUtils.isNotEmpty(name()), "Name cannot be empty for " + this.getClass());
 
-    /*if (iDate().after(legacyFieldDate)) {
-      Preconditions.checkArgument(acceptedDataTypes().contains(dataType()),
-          this.getClass().getSimpleName() + " must have DataType:" + acceptedDataTypes());
-    }*/
   }
 
 
   private static final long serialVersionUID = 5640078738113157867L;
+
   final static Date legacyFieldDate = new Date(1470845479000L); // 08/10/2016 @ 4:11pm (UTC)
 
-  @Value.Default
+    @Value.Default
   public boolean searchable() {
     return false;
   }
@@ -177,15 +176,18 @@ public abstract class Field implements FieldIf, Serializable {
     return false;
   }
 
+  @CloseDBIfOpened
   @JsonIgnore
   @Value.Lazy
   public List<FieldVariable> fieldVariables() {
     if (innerFieldVariables == null) {
       try {
-        //System.err.println("loading field.variables:" + this.variable() + ":"+ System.identityHashCode(this));
         innerFieldVariables = FactoryLocator.getFieldFactory().loadVariables(this);
-      } catch (DotDataException e) {
-        throw new DotStateException("unable to load field variables:" + e.getMessage(), e);
+      } catch (final DotDataException e) {
+        final String errorMsg = String.format("Unable to load field variables for field '%s' [%s]: %s", this.name(),
+                this.id(), e.getMessage());
+        Logger.error(this, errorMsg);
+        throw new DotStateException(errorMsg, e);
       }
     }
 
@@ -273,5 +275,15 @@ public abstract class Field implements FieldIf, Serializable {
   public String getContentTypeFieldLabelKey(){
     String legacyName = LegacyFieldTypes.getLegacyName(this.getClass());
     return legacyName.substring(0, 1).toUpperCase() + legacyName.substring(1);
+  }
+
+  /**
+   * Returns a collection of variable keys that the Field should respect
+   * @return List of String (property names)
+   */
+  @JsonIgnore
+  @Value.Default
+  public List<String> fieldVariableKeys() {
+    return Collections.emptyList();
   }
 }

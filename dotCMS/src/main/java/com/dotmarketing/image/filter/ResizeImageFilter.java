@@ -21,6 +21,14 @@ public class ResizeImageFilter extends ImageFilter {
 		double w = parameters.get(getPrefix() +"w") != null?Integer.parseInt(parameters.get(getPrefix() +"w")[0]):0;
 		double h = parameters.get(getPrefix() +"h") != null?Integer.parseInt(parameters.get(getPrefix() +"h")[0]):0;
 		
+		
+		if(file.getName().endsWith(".gif")) {
+		  return new ResizeGifImageFilter().runFilter(file, parameters);
+		}
+		
+		
+		
+		
 		File resultFile = getResultsFile(file, parameters);
 		
 		if(!overwrite(resultFile,parameters)){
@@ -30,17 +38,17 @@ public class ResizeImageFilter extends ImageFilter {
 		
 		try {
 			
-			BufferedImage src = ImageIO.read(file);
+			
 			if(w ==0 && h ==0){
 				return file;
 			}
-
+			BufferedImage srcImage = ImageIO.read(file);
 			
 			if(w ==0 && h >0){
-				w = Math.round(h * src.getWidth() / src.getHeight());
+				w = Math.round(h * srcImage.getWidth() / srcImage.getHeight());
 			}
 			if(w >0 && h ==0){
-				h = Math.round(w * src.getHeight() / src.getWidth());
+				h = Math.round(w * srcImage.getHeight() / srcImage.getWidth());
 			}
 			
 			int width    =      (int) w;    
@@ -48,8 +56,9 @@ public class ResizeImageFilter extends ImageFilter {
 
 
 			BufferedImageOp resampler = new ResampleOp(width, hieght, ResampleOp.FILTER_LANCZOS); // A good default filter, see class documentation for more info
-			BufferedImage output = resampler.filter(ImageIO.read(file), null);
+			BufferedImage output = resampler.filter(srcImage, null);
 			ImageIO.write(output, "png", resultFile);
+			output.flush();
 			return resultFile;
 
 		} catch (FileNotFoundException e) {

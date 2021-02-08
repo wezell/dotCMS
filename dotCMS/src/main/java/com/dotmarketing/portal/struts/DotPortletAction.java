@@ -9,10 +9,14 @@ import static com.dotmarketing.business.PermissionAPI.PERMISSION_PUBLISH;
 import static com.dotmarketing.business.PermissionAPI.PERMISSION_READ;
 import static com.dotmarketing.business.PermissionAPI.PERMISSION_WRITE;
 
+import com.dotcms.rendering.velocity.services.VelocityResourceKey;
 import com.dotcms.repackage.javax.portlet.ActionRequest;
 import com.dotcms.repackage.javax.portlet.ActionResponse;
 import com.dotcms.repackage.javax.portlet.PortletConfig;
 import com.dotcms.repackage.javax.portlet.RenderRequest;
+import com.dotcms.repackage.org.apache.struts.action.ActionForm;
+import com.dotcms.repackage.org.apache.struts.action.ActionForward;
+import com.dotcms.repackage.org.apache.struts.action.ActionMapping;
 import com.dotcms.util.SecurityUtils;
 import com.dotmarketing.beans.Host;
 import com.dotmarketing.beans.Identifier;
@@ -20,6 +24,7 @@ import com.dotmarketing.beans.Inode;
 import com.dotmarketing.beans.PermissionAsset;
 import com.dotmarketing.beans.WebAsset;
 import com.dotmarketing.business.APILocator;
+import com.dotmarketing.business.CacheLocator;
 import com.dotmarketing.business.PermissionAPI;
 import com.dotmarketing.business.Role;
 import com.dotmarketing.cms.factories.PublicCompanyFactory;
@@ -33,14 +38,19 @@ import com.dotmarketing.factories.WebAssetFactory;
 import com.dotmarketing.portlets.categories.business.CategoryAPI;
 import com.dotmarketing.portlets.containers.model.Container;
 import com.dotmarketing.portlets.contentlet.business.HostAPI;
+import com.dotmarketing.portlets.contentlet.model.Contentlet;
 import com.dotmarketing.portlets.folders.model.Folder;
+import com.dotmarketing.portlets.htmlpageasset.model.HTMLPageAsset;
+import com.dotmarketing.portlets.templates.model.Template;
 import com.dotmarketing.util.ActivityLogger;
 import com.dotmarketing.util.HostUtil;
 import com.dotmarketing.util.InodeUtils;
 import com.dotmarketing.util.Logger;
+import com.dotmarketing.util.PageMode;
 import com.dotmarketing.util.PaginatedArrayList;
 import com.dotmarketing.util.UtilMethods;
 import com.dotmarketing.util.WebKeys;
+import com.dotmarketing.util.WebKeys.Cache;
 import com.liferay.portal.NoSuchUserException;
 import com.liferay.portal.language.LanguageUtil;
 import com.liferay.portal.model.Company;
@@ -57,9 +67,6 @@ import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
 import javax.servlet.jsp.PageContext;
 import org.apache.commons.beanutils.BeanUtils;
-import org.apache.struts.action.ActionForm;
-import org.apache.struts.action.ActionForward;
-import org.apache.struts.action.ActionMapping;
 
 /**
  * Provides utility methods to interact with {@link WebAsset} objects in dotCMS.
@@ -432,16 +439,23 @@ public class DotPortletAction extends PortletAction {
 	public void _retrieveWebAsset(ActionRequest req, ActionResponse res, PortletConfig config, ActionForm form, User user, Class myClass,
 			String webkey) throws Exception {
 		WebAsset webAsset;
-		
+		Identifier ident = null;
 		String inode=req.getParameter("inode");
 		
 		if(InodeUtils.isSet(inode)) {
 			// editing existing asset
-			
-			Identifier ident=APILocator.getIdentifierAPI().findFromInode(inode);
+			if(Template.class.equals(myClass)){
+				ident = APILocator.getIdentifierAPI().find(APILocator.getTemplateAPI().find(inode,user,false).getIdentifier());
+			} else {
+				ident = APILocator.getIdentifierAPI().findFromInode(inode);
+			}
 			webAsset = (WebAsset) APILocator.getVersionableAPI().findWorkingVersion(ident, user, false);
 			if(!webAsset.getInode().equals(inode)){
-				webAsset = (WebAsset)InodeFactory.getInode(inode, myClass);
+				if(Template.class.equals(myClass)){
+					webAsset = APILocator.getTemplateAPI().find(inode,user,false);
+				} else {
+					webAsset = (WebAsset) InodeFactory.getInode(inode, myClass);
+				}
 			}
 			
 			// Checking permissions

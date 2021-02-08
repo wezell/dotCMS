@@ -390,9 +390,10 @@ public final class WebKeys {
     public static final String USER_FILTER_LIST_INODE = "com.dotmarketing.userfilter.inode";
 
     //DIRECTOR VARIABLES FOR PORTLET URL
-	public static final String JAVAX_PORTLET_REQUEST = "com.dotmarketing.javax.portlet.request";
-	public static final String JAVAX_PORTLET_CONFIG = "com.dotmarketing.javax.portlet.config";
-	public static final String LAYOUT = "com.dotmarketing.LAYOUT";
+    public static final String JAVAX_PORTLET_REQUEST = "com.dotmarketing.javax.portlet.request";
+    public static final String JAVAX_PORTLET_CONFIG = "com.dotmarketing.javax.portlet.config";
+    public static final String LAYOUT = "com.dotmarketing.LAYOUT";
+    public static final String LAYOUT_PREVIOUS = "com.dotmarketing.LAYOUT.previous";
     public static final String SESSION_MESSAGES = "com.dotmarketing.session.messages";
 
     //LANGUAGE MANAGER
@@ -411,8 +412,8 @@ public final class WebKeys {
 	public static final String REDIRECT_AFTER_LOGIN = "REDIRECT_AFTER_LOGIN";
     public static final String DEFAULT_CONTENT_TO_DEFAULT_LANGUAGE = "DEFAULT_CONTENT_TO_DEFAULT_LANGUAGE";
 
-	// CMS USER LOGIN
-    public static final String CMS_USER = "cms.user";
+	
+    public static final String CMS_USER = com.liferay.portal.util.WebKeys.USER;
     public static final String CMS_PERSONALIZATION_BEAN = "cms.user.personalization";
     public static final String CMS_USER_REGISTRATIONS = "cms.user.registrations";
     public static final String CMS_CURRENT_PAGE = "cms.current.page";
@@ -719,5 +720,7 @@ public final class WebKeys {
     public static final String PAGE_MODE_PARAMETER= "mode";
 
     public static final String LANGUAGE_ID_PARAMETER= "language_id";
+
+    public static final String BACKEND_LANGUAGE_PARAMETER_NAME = "backend_language_id";
 
 }

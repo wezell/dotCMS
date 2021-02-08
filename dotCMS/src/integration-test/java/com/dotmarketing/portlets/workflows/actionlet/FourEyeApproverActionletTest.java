@@ -23,18 +23,21 @@ import com.dotmarketing.exception.DotSecurityException;
 import com.dotmarketing.portlets.contentlet.business.ContentletAPI;
 import com.dotmarketing.portlets.contentlet.model.Contentlet;
 import com.dotmarketing.portlets.contentlet.model.ContentletVersionInfo;
+import com.dotmarketing.portlets.contentlet.model.IndexPolicy;
 import com.dotmarketing.portlets.folders.business.FolderAPI;
 import com.dotmarketing.portlets.languagesmanager.business.LanguageAPI;
 import com.dotmarketing.portlets.workflows.business.BaseWorkflowIntegrationTest;
 import com.dotmarketing.portlets.workflows.business.WorkflowAPI;
 import com.dotmarketing.portlets.workflows.model.WorkflowActionClass;
 import com.dotmarketing.portlets.workflows.model.WorkflowProcessor;
+import com.dotmarketing.util.Config;
 import com.liferay.portal.model.User;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Date;
 import java.util.List;
+import java.util.Optional;
 import org.junit.AfterClass;
 import org.junit.Assert;
 import org.junit.BeforeClass;
@@ -150,6 +153,7 @@ public class FourEyeApproverActionletTest extends BaseWorkflowIntegrationTest {
         Contentlet contentletToCleanUp = null;
 
         try {
+            Config.setProperty("DEFAULT_CONTENT_TO_DEFAULT_LANGUAGE", true);
             // Create a contentlet first and save it
             final long languageId = languageAPI.getDefaultLanguage().getId();
             final Contentlet cont = new Contentlet();
@@ -160,6 +164,8 @@ public class FourEyeApproverActionletTest extends BaseWorkflowIntegrationTest {
             cont.setStringProperty("title", "4-Eye Approval Test Title");
             cont.setStringProperty("txt", "4-Eye Approval Test Text");
             cont.setHost(site.getIdentifier());
+            cont.setIndexPolicy(IndexPolicy.WAIT_FOR);
+            cont.setBoolProperty(Contentlet.IS_TEST_MODE, true);
             Contentlet contentlet1 = contentletAPI.checkin(cont, systemUser, false);
             Assert.assertFalse("The contentlet cannot be live, it has just been created.",
                     contentlet1.isLive());
@@ -187,17 +193,18 @@ public class FourEyeApproverActionletTest extends BaseWorkflowIntegrationTest {
 
             // The contentlet MUST NOT be live yet, it needs one more approval
             contentletAPI.isInodeIndexed(processedContentlet.getInode(), 6);
-            ContentletVersionInfo contentletVersionInfo = APILocator.getVersionableAPI()
+            Optional<ContentletVersionInfo> contentletVersionInfo = APILocator.getVersionableAPI()
                     .getContentletVersionInfo(processedContentlet.getIdentifier(), languageId);
-            Assert.assertNotNull(contentletVersionInfo);
+
+            Assert.assertTrue(contentletVersionInfo.isPresent());
             Assert.assertNull("The contentlet cannot be live, it needs 1 more approver.",
-                    contentletVersionInfo.getLiveInode());
+                    contentletVersionInfo.get().getLiveInode());
             Assert.assertNotNull("The contentlet should be working, it needs 1 more approver.",
-                    contentletVersionInfo.getWorkingInode());
+                    contentletVersionInfo.get().getWorkingInode());
 
             // Triggering the four eyes action
             Contentlet contentlet2 = contentletAPI
-                    .find(contentletVersionInfo.getWorkingInode(), systemUser, false);
+                    .find(contentletVersionInfo.get().getWorkingInode(), systemUser, false);
             contentlet2.setActionId(
                     schemeStepActionResult.getAction().getId());
             processor = workflowAPI.fireWorkflowPreCheckin(contentlet2, publisher2);
@@ -208,11 +215,13 @@ public class FourEyeApproverActionletTest extends BaseWorkflowIntegrationTest {
             contentletAPI.isInodeIndexed(processedContentlet.getInode(), true, 6);
             contentletVersionInfo = APILocator.getVersionableAPI()
                     .getContentletVersionInfo(processedContentlet.getIdentifier(), languageId);
+
+            Assert.assertTrue(contentletVersionInfo.isPresent());
             Assert.assertNotNull(contentletVersionInfo);
             Assert.assertNotNull("The contentlet MUST be live, it has all the approvers",
-                    contentletVersionInfo.getLiveInode());
+                    contentletVersionInfo.get().getLiveInode());
             Assert.assertNotNull("The contentlet should be working also.",
-                    contentletVersionInfo.getWorkingInode());
+                    contentletVersionInfo.get().getWorkingInode());
 
             Contentlet contentlet3 = contentletAPI
                     .findContentletByIdentifier(processedContentlet.getIdentifier(),
@@ -226,11 +235,8 @@ public class FourEyeApproverActionletTest extends BaseWorkflowIntegrationTest {
         } finally {
             // Cleanup
             if (null != contentletToCleanUp) {
-                if (contentletToCleanUp.isLive()) {
-                    contentletAPI.unpublish(contentletToCleanUp, systemUser, false);
-                }
-                contentletAPI.archive(contentletToCleanUp, systemUser, false);
-                contentletAPI.delete(contentletToCleanUp, systemUser, false);
+
+                contentletAPI.destroy(contentletToCleanUp, systemUser, false);
             }
         }
 
@@ -281,8 +287,7 @@ public class FourEyeApproverActionletTest extends BaseWorkflowIntegrationTest {
                 contentlet2.isLive());
 
         // Cleanup
-        contentletAPI.archive(contentlet2, systemUser, false);
-        contentletAPI.delete(contentlet2, systemUser, false);
+        contentletAPI.destroy(contentlet2, systemUser, false);
     }
 
     @Test
@@ -323,8 +328,7 @@ public class FourEyeApproverActionletTest extends BaseWorkflowIntegrationTest {
         }
 
         // Cleanup
-        contentletAPI.archive(contentlet1, systemUser, false);
-        contentletAPI.delete(contentlet1, systemUser, false);
+        contentletAPI.destroy(contentlet1, systemUser, false);
 
         Assert.assertTrue(
                 "The root cause of the exception IS NOT the expected error. Please check this test.",

@@ -5,8 +5,7 @@ import com.dotcms.business.CloseDBIfOpened;
 import com.dotcms.business.WrapInTransaction;
 import com.dotcms.contenttype.business.ContentTypeAPI;
 import com.dotcms.contenttype.business.RelationshipFactory;
-import com.dotcms.contenttype.model.field.FieldBuilder;
-import com.dotcms.contenttype.model.field.RelationshipField;
+import com.dotcms.contenttype.model.field.ImmutableRelationshipField;
 import com.dotcms.contenttype.model.type.ContentType;
 import com.dotcms.contenttype.model.type.ContentTypeIf;
 import com.dotcms.contenttype.transform.contenttype.StructureTransformer;
@@ -15,6 +14,7 @@ import com.dotmarketing.beans.Tree;
 import com.dotmarketing.common.db.DotConnect;
 import com.dotmarketing.db.DbConnectionFactory;
 import com.dotmarketing.exception.DotDataException;
+import com.dotmarketing.exception.DotRuntimeException;
 import com.dotmarketing.exception.DotSecurityException;
 import com.dotmarketing.portlets.contentlet.business.ContentletAPI;
 import com.dotmarketing.portlets.contentlet.model.Contentlet;
@@ -23,15 +23,17 @@ import com.dotmarketing.portlets.structure.model.Field;
 import com.dotmarketing.portlets.structure.model.Relationship;
 
 import com.dotmarketing.portlets.structure.transform.ContentletRelationshipsTransformer;
+import com.dotmarketing.util.Logger;
 import com.dotmarketing.util.UtilMethods;
 import com.dotmarketing.util.WebKeys;
 import com.google.common.annotations.VisibleForTesting;
 import com.liferay.portal.model.User;
 import com.liferay.util.StringPool;
-
+import io.vavr.control.Try;
 import java.util.Date;
 import java.util.List;
 import java.util.Optional;
+import org.apache.commons.beanutils.BeanUtils;
 import java.util.Map;
 
 // THIS IS A FAKE API SO PEOPLE CAN FIND AND USE THE RELATIONSHIPFACTORY
@@ -138,14 +140,38 @@ public class RelationshipAPIImpl implements RelationshipAPI {
         return this.relationshipFactory.relatedContentTrees(relationship, contentlet, hasParent);
     }
 
+    /**
+     * @deprecated For relationship fields use {@link RelationshipAPI#isChildField(Relationship, com.dotcms.contenttype.model.field.Field)} instead
+     * @param rel
+     * @param st
+     * @return
+     */
+    @Deprecated
     @Override
     public boolean isParent(Relationship rel, ContentTypeIf st) {
         return this.relationshipFactory.isParent(rel, st);
     }
 
     @Override
+    public boolean isChildField(Relationship rel, com.dotcms.contenttype.model.field.Field field) {
+        return this.relationshipFactory.isChildField(rel, field);
+    }
+
+    /**
+     * @deprecated For relationship fields use {@link RelationshipAPI#isParentField(Relationship, com.dotcms.contenttype.model.field.Field)} instead
+     * @param rel
+     * @param st
+     * @return
+     */
+    @Deprecated
+    @Override
     public boolean isChild(Relationship rel, ContentTypeIf st) {
         return this.relationshipFactory.isChild(rel, st);
+    }
+
+    @Override
+    public boolean isParentField(Relationship rel, com.dotcms.contenttype.model.field.Field field) {
+        return this.relationshipFactory.isParentField(rel, field);
     }
 
     @Override
@@ -156,7 +182,96 @@ public class RelationshipAPIImpl implements RelationshipAPI {
     @WrapInTransaction
     @Override
     public void save(Relationship relationship) throws DotDataException {
+        checkRelationshipConstraints(relationship);
         this.relationshipFactory.save(relationship);
+    }
+
+    /**
+     * Guarantees a unique relationship for a field
+     * @param relationship
+     */
+    private void checkRelationshipConstraints(final Relationship relationship)
+            throws DotDataException {
+
+        if (relationship.isRelationshipField() && doesRelationshipFieldAlreadyExist(relationship)) {
+            Logger.error(this, "The relationship " + relationship.getRelationTypeValue() +" already exists");
+            throw new DotValidationException(
+                    "The relationship " + relationship.getRelationTypeValue() +" already exists");
+        }
+    }
+
+    /**
+     * @param relationship
+     * @return
+     * @throws DotDataException
+     */
+    private boolean doesRelationshipFieldAlreadyExist(final Relationship relationship)
+            throws DotDataException {
+
+        List<Relationship> relationships;
+        //Checks if it is a self-joined relationship
+        if (sameParentAndChild(relationship)){
+            relationships = byContentType(relationship.getChildStructure());
+            boolean duplicatesFound = false;
+
+            if (relationship.getParentRelationName() != null) {
+
+                //Verifies that the parent field does not belong to another relationship as parent
+                duplicatesFound = relationships.stream().anyMatch(
+                        rel -> relationship.getParentRelationName()
+                                .equals(rel.getParentRelationName())
+                                && !rel.getInode().equals(relationship.getInode()) && rel
+                                .isRelationshipField());
+
+                //Verifies that the parent field does not belong to another relationship as child
+                duplicatesFound |= relationships.stream().anyMatch(
+                        rel -> relationship.getParentRelationName()
+                                .equals(rel.getChildRelationName())
+                                && !rel.getInode().equals(relationship.getInode()) && rel
+                                .isRelationshipField());
+            }
+
+
+            if (relationship.getChildRelationName() != null) {
+                //Verifies that the child field does not belong to another relationship as parent
+                duplicatesFound |= relationships.stream().anyMatch(
+                        rel -> relationship.getChildRelationName()
+                                .equals(rel.getParentRelationName())
+                                && !rel.getInode().equals(relationship.getInode()) && rel
+                                .isRelationshipField());
+
+                //Verifies that the child field does not belong to another relationship as child
+                duplicatesFound |= relationships.stream().anyMatch(
+                        rel -> relationship.getChildRelationName()
+                                .equals(rel.getChildRelationName())
+                                && !rel.getInode().equals(relationship.getInode()) && rel
+                                .isRelationshipField());
+            }
+
+            return duplicatesFound;
+        }else {
+            //Verifies that the parent field does not belong to another relationship
+            if (relationship.getParentRelationName() != null) {
+                relationships = byChild(relationship.getChildStructure());
+                return relationships.stream().anyMatch(
+                        rel -> relationship.getParentRelationName()
+                                .equals(rel.getParentRelationName())
+                                && !rel.getInode().equals(relationship.getInode()) && rel
+                                .isRelationshipField());
+            }
+
+            //Verifies that the child field does not belong to another relationship
+            if (relationship.getChildRelationName() != null) {
+                relationships = byParent(relationship.getParentStructure());
+                return relationships.stream().anyMatch(
+                        rel -> relationship.getChildRelationName()
+                                .equals(rel.getChildRelationName())
+                                && !rel.getInode().equals(relationship.getInode()) && rel
+                                .isRelationshipField());
+            }
+        }
+
+        return false;
     }
 
     @WrapInTransaction
@@ -166,8 +281,7 @@ public class RelationshipAPIImpl implements RelationshipAPI {
         this.relationshipFactory.save(relationship);
     }
 
-    private void checkReadOnlyFields(final Relationship relationship, final String inode)
-            throws DotDataException {
+    private void checkReadOnlyFields(final Relationship relationship, final String inode) {
         if (UtilMethods.isSet(inode) && UtilMethods.isSet(relationship)) {
 
             //Check if the relationship already exists
@@ -196,7 +310,7 @@ public class RelationshipAPIImpl implements RelationshipAPI {
     @WrapInTransaction
     @Override
     public void create(Relationship relationship) throws DotDataException {
-        this.relationshipFactory.save(relationship);
+        save(relationship);
     }
 
     @WrapInTransaction
@@ -327,8 +441,9 @@ public class RelationshipAPIImpl implements RelationshipAPI {
                 oldRelationship.getParentStructure()).from();
         final ContentType childContentType = new StructureTransformer(
                 oldRelationship.getChildStructure()).from();
+        
         //Create Relationship Fields
-
+        
         final String parentFieldName = suggestNewFieldName(parentContentType, oldRelationship,
                 false);
         final String childFieldName = suggestNewFieldName(childContentType, oldRelationship, true);
@@ -338,18 +453,27 @@ public class RelationshipAPIImpl implements RelationshipAPI {
                 oldRelationship.getCardinality(), oldRelationship.isChildRequired(),
                 childContentType.variable());
 
-        createRelationshipField(parentFieldName, childContentType.id(),
+        final com.dotcms.contenttype.model.field.Field childRelationshipField =createRelationshipField(parentFieldName, childContentType.id(),
                 oldRelationship.getCardinality(), oldRelationship.isParentRequired(),
                 parentContentType.variable() + "." + parentRelationshipField.variable());
 
-        //Get the new Relationship
-        final Relationship newRelationship = byTypeValue(
-                parentContentType.variable() + "." + parentRelationshipField.variable());
 
+        Relationship newRelationship = (Relationship) Try.of(()->  BeanUtils.cloneBean(oldRelationship)).getOrElseThrow(e-> new DotRuntimeException(e));
+        
+        
+        newRelationship.setRelationTypeValue(parentContentType.variable() + "." + parentRelationshipField.variable());
+        newRelationship.setParentRelationName(childRelationshipField.variable());
+        newRelationship.setChildRelationName(parentRelationshipField.variable());
+        
+        save(newRelationship);
+        
+        
+        
         migrateOldRelationshipReferences(oldRelationship, newRelationship);
 
     }
 
+    @CloseDBIfOpened
     @Override
     public List<Relationship> dbAll() {
         return relationshipFactory.dbAll();
@@ -382,17 +506,25 @@ public class RelationshipAPIImpl implements RelationshipAPI {
         dc.addParam(oldRelationship.getRelationTypeValue());
         dc.loadResult();
 
-        //Delete the old relationship
-        APILocator.getRelationshipAPI().delete(oldRelationship);
-
         //Reindex both Content Types, so the content show the relationships
         contentletAPI.refresh(oldRelationship.getParentStructure());
         contentletAPI.refresh(oldRelationship.getChildStructure());
     }
 
+    /**
+     * This creates a relationship field but DOES NOT create try to create the underlying relationship
+     * @param fieldName
+     * @param parentContentTypeID
+     * @param cardinality
+     * @param isRequired
+     * @param childContentTypeVariable
+     * @return
+     * @throws DotDataException
+     * @throws DotSecurityException
+     */
     private com.dotcms.contenttype.model.field.Field createRelationshipField(final String fieldName, final String parentContentTypeID, final int cardinality, final boolean isRequired, final String childContentTypeVariable)
             throws DotDataException, DotSecurityException {
-        final com.dotcms.contenttype.model.field.Field field = FieldBuilder.builder(RelationshipField.class)
+        final com.dotcms.contenttype.model.field.RelationshipField field = ImmutableRelationshipField.builder()
                 .name(fieldName)
                 .contentTypeId(parentContentTypeID)
                 .values(String.valueOf(WebKeys.Relationship.RELATIONSHIP_CARDINALITY.values()[cardinality].ordinal()))
@@ -400,6 +532,7 @@ public class RelationshipAPIImpl implements RelationshipAPI {
                 .listed(false)
                 .required(isRequired)
                 .relationType(childContentTypeVariable)
+                .skipRelationshipCreation(true)
                 .build();
 
         return APILocator.getContentTypeFieldAPI().save(field,APILocator.systemUser());

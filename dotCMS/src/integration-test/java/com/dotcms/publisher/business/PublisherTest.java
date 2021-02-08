@@ -18,9 +18,11 @@ import com.dotcms.publisher.receiver.BundlePublisher;
 import com.dotcms.publishing.BundlerStatus;
 import com.dotcms.publishing.DotBundleException;
 import com.dotcms.publishing.DotPublishingException;
+import com.dotcms.publishing.FilterDescriptor;
 import com.dotcms.publishing.PublishStatus;
 import com.dotcms.publishing.PublisherConfig;
 import com.dotcms.publishing.PublisherConfig.Operation;
+import com.dotcms.repackage.org.apache.struts.Globals;
 import com.dotcms.util.IntegrationTestInitService;
 import com.dotmarketing.beans.Host;
 import com.dotmarketing.business.APILocator;
@@ -33,6 +35,7 @@ import com.dotmarketing.portlets.folders.model.Folder;
 import com.dotmarketing.portlets.htmlpageasset.model.HTMLPageAsset;
 import com.dotmarketing.util.Config;
 import com.dotmarketing.util.UtilMethods;
+import com.google.common.collect.ImmutableMap;
 import com.liferay.portal.model.User;
 import com.liferay.portal.struts.MultiMessageResources;
 import com.liferay.portal.struts.MultiMessageResourcesFactory;
@@ -40,7 +43,6 @@ import com.tngtech.java.junit.dataprovider.DataProviderRunner;
 import java.io.IOException;
 import java.util.Map;
 import org.apache.felix.framework.OSGIUtil;
-import org.apache.struts.Globals;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -73,7 +75,8 @@ public class PublisherTest extends IntegrationTestBase {
         //Setting web app environment
         IntegrationTestInitService.getInstance().init();
         LicenseTestUtil.getLicense();
-        OSGIUtil.getInstance().initializeFramework(Config.CONTEXT);
+
+        createFilter();
 
         when(Config.CONTEXT.getAttribute(Globals.MESSAGES_KEY))
                 .thenReturn(new MultiMessageResources( MultiMessageResourcesFactory.createFactory(),""));
@@ -150,8 +153,8 @@ public class PublisherTest extends IntegrationTestBase {
             assertNotNull(bundleData.get(PublisherTestUtil.FILE));
 
             // Test content to be replaced using unique field match
-            APILocator.getContentletAPI().archive(contentlet, adminUser, false);
-            APILocator.getContentletAPI().delete(contentlet, adminUser, false);
+            APILocator.getContentletAPI().destroy(contentlet, adminUser, false );
+
             final Contentlet contentToReplace = new ContentletDataGen(testContentType.id())
                     .setProperty(TEST_TITLE, uniqueValue)
                     .setProperty(TEST_DESCRIPTION, "Other value").nextPersisted();
@@ -172,9 +175,7 @@ public class PublisherTest extends IntegrationTestBase {
         } finally {
 
             if (UtilMethods.isSet(resultContentlet)) {
-                APILocator.getContentletAPI().archive(resultContentlet, systemUser, false);
-                APILocator.getContentletAPI().delete(resultContentlet, systemUser, false);
-
+                APILocator.getContentletAPI().destroy(resultContentlet, systemUser, false );
             }
 
             if (UtilMethods.isSet(ppBean)) {
@@ -392,5 +393,14 @@ public class PublisherTest extends IntegrationTestBase {
             this.folder = folder;
             this.page = page;
         }
+    }
+
+    private static void createFilter() {
+        final Map<String, Object> filtersMap =
+                ImmutableMap.of("dependencies", true, "relationships", true);
+        final FilterDescriptor filterDescriptor =
+                new FilterDescriptor("filterTestAPI.yml", "Filter Test Title", filtersMap, true,
+                        "Reviewer,dotcms.org.2789");
+        APILocator.getPublisherAPI().addFilterDescriptor(filterDescriptor);
     }
 }

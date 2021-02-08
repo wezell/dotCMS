@@ -1,7 +1,13 @@
 package com.dotmarketing.util;
 
+import com.dotcms.content.elasticsearch.util.ESUtils;
+import com.dotcms.contenttype.model.field.BinaryField;
+import com.dotcms.contenttype.model.field.DataTypes;
 import com.dotcms.contenttype.transform.contenttype.StructureTransformer;
+import com.dotcms.contenttype.transform.field.LegacyFieldTransformer;
 import com.dotcms.repackage.com.csvreader.CsvReader;
+import com.dotcms.rest.api.v1.temp.DotTempFile;
+import com.dotcms.rest.exception.BadRequestException;
 import com.dotcms.util.LowerKeyMap;
 import com.dotcms.util.RelationshipUtil;
 import com.dotmarketing.beans.Host;
@@ -29,6 +35,7 @@ import com.dotmarketing.portlets.contentlet.business.DotContentletValidationExce
 import com.dotmarketing.portlets.contentlet.business.HostAPI;
 import com.dotmarketing.portlets.contentlet.model.Contentlet;
 import com.dotmarketing.portlets.contentlet.model.ContentletDependencies;
+import com.dotmarketing.portlets.contentlet.model.IndexPolicy;
 import com.dotmarketing.portlets.folders.business.FolderAPI;
 import com.dotmarketing.portlets.folders.model.Folder;
 import com.dotmarketing.portlets.languagesmanager.business.LanguageAPI;
@@ -49,21 +56,15 @@ import com.liferay.util.StringPool;
 import java.io.IOException;
 import java.io.Reader;
 import java.io.StringWriter;
+import java.net.URL;
 import java.sql.Timestamp;
 import java.text.DateFormat;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import javax.servlet.http.HttpServletRequest;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -159,7 +160,7 @@ public class ImportUtil {
 	 * @throws DotDataException
 	 *             An error occurred when analyzing the CSV file.
 	 */
-    public static HashMap<String, List<String>> importFile(Long importId, String currentSiteId, String contentTypeInode, String[] keyfields, boolean preview, boolean isMultilingual, User user, long language, String[] csvHeaders, CsvReader csvreader, int languageCodeHeaderColumn, int countryCodeHeaderColumn, Reader reader, String wfActionId)
+    public static HashMap<String, List<String>> importFile(Long importId, String currentSiteId, String contentTypeInode, String[] keyfields, boolean preview, boolean isMultilingual, User user, long language, String[] csvHeaders, CsvReader csvreader, int languageCodeHeaderColumn, int countryCodeHeaderColumn, Reader reader, String wfActionId, final HttpServletRequest request)
             throws DotRuntimeException, DotDataException {
 
         HashMap<String, List<String>> results = new HashMap<String, List<String>>();
@@ -179,7 +180,7 @@ public class ImportUtil {
         List<Field> uniqueFields = new ArrayList<Field>();
 
         //Initializing variables
-        int lines = 0;
+        int lines = 1;
         int errors = 0;
         int lineNumber = 0;
 
@@ -254,7 +255,7 @@ public class ImportUtil {
 
                                 //Importing content record...
                                 importLine( csvLine, currentSiteId, contentType, preview, isMultilingual, user, results, lineNumber, languageToImport, headers, keyFields, choosenKeyField,
-                                        counters, keyContentUpdated, contentTypePermissions, uniqueFieldBeans, uniqueFields, relationships, onlyChild, onlyParent, sameKeyBatchInsert, wfActionId );
+                                        counters, keyContentUpdated, contentTypePermissions, uniqueFieldBeans, uniqueFields, relationships, onlyChild, onlyParent, sameKeyBatchInsert, wfActionId, request );
 
                                 //Storing the record keys we just imported for a later reference...
                                 if ( keyFields != null && !keyFields.isEmpty() ) {
@@ -318,7 +319,7 @@ public class ImportUtil {
                 }
             }
         } catch (Exception e) {
-            Logger.error(ImportContentletsAction.class,e.getMessage());
+            Logger.error(ImportContentletsAction.class, e.getMessage(), e);
 
         } finally {
             if (reader != null) {
@@ -417,12 +418,6 @@ public class ImportUtil {
                                 LanguageUtil.get(user, "Header")+": \"" + header
 
                                 +"\" "+ LanguageUtil.get(user, "matches-a-field-of-type-button-this-column-of-data-will-be-ignored"));
-                    }
-                    else if (field.getFieldType().equals(Field.FieldType.BINARY.toString())){
-                        found = true;
-                        results.get("warnings").add(
-                                LanguageUtil.get(user, "Header")+": \"" + header
-                                + "\" "+ LanguageUtil.get(user, "matches-a-field-of-type-binary-this-column-of-data-will-be-ignored"));
                     }
                     else if (field.getFieldType().equals(Field.FieldType.LINE_DIVIDER.toString())){
                         found = true;
@@ -531,12 +526,17 @@ public class ImportUtil {
             }
         }
 
-        if (keyFieldsInodes.length == 0)
+        if (keyFieldsInodes.length == 0) {
+            Logger.debug(ImportUtil.class, ()->"Warning: No-key-fields-were-choosen-it-could-give-to-you-duplicated-content");
             results.get("warnings").add(
-                    LanguageUtil.get(user, "No-key-fields-were-choosen-it-could-give-to-you-duplicated-content"));
+                    LanguageUtil.get(user,
+                            "No-key-fields-were-choosen-it-could-give-to-you-duplicated-content"));
+        }
 
         if(!uniqueFields.isEmpty()){
             for(Field f : uniqueFields){
+
+                Logger.debug(ImportUtil.class, ()->"the-structure-field" + " " + f.getVelocityVarName() +  " " + "is-unique");
                 results.get("warnings").add(LanguageUtil.get(user, "the-structure-field")+ " " + f.getVelocityVarName() +  " " +LanguageUtil.get(user, "is-unique"));
             }
         }
@@ -554,6 +554,8 @@ public class ImportUtil {
                 .add(
                         LanguageUtil.get(user, "No-headers-found-on-the-file-that-match-any-of-the-structure-fields"));
             }
+
+            Logger.debug(ImportUtil.class, ()->"Not-all-the-structure-fields-were-matched-against-the-file-headers-Some-content-fields-could-be-left-empty");
             results
             .get("warnings")
             .add(LanguageUtil.get(user, "Not-all-the-structure-fields-were-matched-against-the-file-headers-Some-content-fields-could-be-left-empty"));
@@ -673,12 +675,12 @@ public class ImportUtil {
     private static void importLine ( String[] line, String currentHostId, Structure contentType, boolean preview, boolean isMultilingual, User user, HashMap<String, List<String>> results, int lineNumber, long language,
             HashMap<Integer, Field> headers, HashMap<Integer, Field> keyFields, StringBuffer choosenKeyField, Counters counters,
             HashSet<String> keyContentUpdated, List<Permission> contentTypePermissions, List<UniqueFieldBean> uniqueFieldBeans, List<Field> uniqueFields, HashMap<Integer, Relationship> relationships, HashMap<Integer, Boolean> onlyChild, HashMap<Integer, Boolean> onlyParent,
-            boolean sameKeyBatchInsert, String wfActionId ) throws DotRuntimeException {
+            boolean sameKeyBatchInsert, String wfActionId, final HttpServletRequest request ) throws DotRuntimeException {
 
         try {
             //Building a values HashMap based on the headers/columns position
             HashMap<Integer, Object> values = new HashMap<Integer, Object>();
-            Set<Category> categories = new HashSet<Category>();
+            Set<Category> categories = new HashSet<>();
             boolean headersIncludeHostField = false;
             for ( Integer column : headers.keySet() ) {
                 Field field = headers.get( column );
@@ -784,6 +786,10 @@ public class ImportUtil {
                         throw new DotRuntimeException("Line #" + lineNumber + " contains errors, Column: " + field.getVelocityVarName() +
                                 ", value: " + value + ", invalid host/folder inode found, line will be ignored.");
                     }
+                } else if (new LegacyFieldTransformer(field).from().typeName().equals(BinaryField.class.getName())){
+                    if(UtilMethods.isSet(value) && !APILocator.getTempFileAPI().validUrl(value)){
+                        throw new DotRuntimeException("Line #" + lineNumber + " contains errors, URL is malformed or Response is not 200");
+                    }
                 }else if(field.getFieldType().equals(Field.FieldType.IMAGE.toString()) || field.getFieldType().equals(Field.FieldType.FILE.toString())) {
                     String filePath = value;
                     if (Field.FieldType.IMAGE.toString().equals(field.getFieldType())
@@ -881,6 +887,8 @@ public class ImportUtil {
                 Logger.debug(ImportUtil.class, e.getMessage(), e);
             }
 
+            Logger.info(ImportUtil.class, "identifierFieldIndex: " + identifierFieldIndex);
+
             String identifier = null;
             if ( -1 < identifierFieldIndex ) {
                 identifier = line[identifierFieldIndex];
@@ -898,14 +906,18 @@ public class ImportUtil {
                 List<ContentletSearch> contentsSearch = conAPI.searchIndex( buffy.toString(), 0, -1, null, user, true );
 
                 if ( (contentsSearch == null) || (contentsSearch.size() == 0) ) {
+
+                    Logger.warn(ImportUtil.class, "Line #" + lineNumber + ": Content not found with identifier " + identifier + "\n");
                     throw new DotRuntimeException( "Line #" + lineNumber + ": Content not found with identifier " + identifier + "\n" );
                 } else {
+
                     Contentlet contentlet;
                     for ( ContentletSearch contentSearch : contentsSearch ) {
                         contentlet = conAPI.find( contentSearch.getInode(), user, true );
                         if ( (contentlet != null) && InodeUtils.isSet( contentlet.getInode() ) ) {
                             contentlets.add( contentlet );
                         } else {
+                            Logger.warn(ImportUtil.class, "Line #" + lineNumber + ": Content not found with identifier " + identifier + "\n");
                             throw new DotRuntimeException( "Line #" + lineNumber + ": Content not found with identifier " + identifier + "\n" );
                         }
                     }
@@ -940,11 +952,15 @@ public class ImportUtil {
                             buffy.append(" +(conhost:").append(text).append(" conFolder:")
                                     .append(text).append(")");
                         } else {
-                            buffy.append(" +").append(contentType.getVelocityVarName()).append(".")
-                                    .append(field.getVelocityVarName()).append(":")
-                                    .append(escapeLuceneSpecialCharacter(text).contains(" ") ? "\""
+                            buffy.append(" +").append(contentType.getVelocityVarName()).append(StringPool.PERIOD)
+                                    .append(field.getVelocityVarName()).append(field.isUnique()? ESUtils.SHA_256: "_dotraw")
+                                    .append(StringPool.COLON)
+                                    .append(field.isUnique()? ESUtils.sha256(contentType.getVelocityVarName()
+                                                    + StringPool.PERIOD + field.getVelocityVarName(), text,
+                                            language): escapeLuceneSpecialCharacter(text).contains(" ") ? "\""
                                             + escapeLuceneSpecialCharacter(text) + "\""
                                             : escapeLuceneSpecialCharacter(text));
+
                         }
                         conditionValues += conditionValues + value + "-";
                     }
@@ -1212,7 +1228,14 @@ public class ImportUtil {
                         }
                     }
                     try{
-                        conAPI.setContentletProperty(cont, field, value);
+                        if (new LegacyFieldTransformer(field).from().typeName().equals(BinaryField.class.getName()) && !preview){
+                            if(UtilMethods.isSet(value)){
+                                final DotTempFile tempFile = APILocator.getTempFileAPI().createTempFileFromUrl(null,request,new URL(value.toString()),-1,-1);
+                                cont.setBinary(field.getVelocityVarName(), tempFile.file);
+                            }
+                        } else {
+                            conAPI.setContentletProperty(cont, field, value);
+                        }
                     }catch(DotContentletStateException de){
                         if(!field.isRequired() || (value!=null && UtilMethods.isSet(String.valueOf(value)))){
                             throw de;
@@ -1332,6 +1355,9 @@ public class ImportUtil {
                         try {
                             executeWfAction = validateWorkflowAction(user, cont);
                         } catch (Exception e) {
+
+                            Logger.debug(ImportUtil.class, results + ", cont: " + cont + ", user: " +  user + ", lineNumber " +  lineNumber +
+                                    "validateWorkflowAction, message.import.contentlet.invalid.action.selected: " + e.getMessage());
                             setActionWarning(results, cont, user, lineNumber,
                                     "message.import.contentlet.invalid.action.found.in.csv",
                                     e.getMessage());
@@ -1352,6 +1378,9 @@ public class ImportUtil {
                             cont.setActionId(wfActionId);
                             executeWfAction = validateWorkflowAction(user, cont);
                         } catch (Exception e) {
+
+                            Logger.debug(ImportUtil.class, results + ", cont: " + cont + ", user: " +  user + ", lineNumber " +  lineNumber +
+                                    "message.import.contentlet.invalid.action.selected: " + e.getMessage());
                             setActionWarning(results, cont, user, lineNumber,
                                     "message.import.contentlet.invalid.action.selected",
                                     e.getMessage());
@@ -1368,7 +1397,9 @@ public class ImportUtil {
                         cont.setLowIndexPriority(true);
 
                         if (userCanExecuteAction) {
+                          cont.setIndexPolicy(IndexPolicy.DEFER);
 
+                          Logger.info(ImportUtil.class, "fireContentWorkflow: " + executeWfAction.getName() + ", id: " + executeWfAction.getId());
                             cont = workflowAPI.fireContentWorkflow(cont,
                                     new ContentletDependencies.Builder()
                                             .respectAnonymousPermissions(Boolean.FALSE)
@@ -1380,19 +1411,9 @@ public class ImportUtil {
                                             .categories(new ArrayList<>(categories))
                                             .generateSystemEvent(Boolean.FALSE).build());
                         } else {
-                            // If the User doesn't have permissions to execute the wfActionId or
-                            // not action Id is set on the CSV/Import select box then use the old
-                            // checking method
-                            cont.setProperty(Contentlet.DONT_VALIDATE_ME, true);
-                            cont.setProperty(Contentlet.DISABLE_WORKFLOW, true);
-                            cont = conAPI.checkin(cont, contentletRelationships,
-                                    new ArrayList<>(categories), contentTypePermissions,
-                                    user, false);
-
-                            if (Config.getBooleanProperty(
-                                    "PUBLISH_CSV_IMPORTED_CONTENT_AUTOMATICALLY", false)) {
-                                APILocator.getContentletAPI().publish(cont, user, false);
-                            }
+                            Logger.info(ImportUtil.class, "runWorkflowIfCould");
+                            cont = runWorkflowIfCould(user, contentTypePermissions,
+                                    categories, cont, contentletRelationships);
                         }
 
                         for (Integer column : headers.keySet()) {
@@ -1460,11 +1481,95 @@ public class ImportUtil {
                 }
             }
         } catch (Exception e) {
-            Logger.error(ImportUtil.class,e.getMessage(),e);
+            Logger.warn(ImportUtil.class,e.getMessage());
             throw new DotRuntimeException(e.getMessage(),e);
         }
     }
 
+    private static Contentlet runWorkflowIfCould(final User user, final List<Permission> contentTypePermissions,
+                                                 final Set<Category> categories, final Contentlet contentlet,
+                                                 final ContentletRelationships contentletRelationships) throws DotDataException, DotSecurityException {
+        // If the User doesn't have permissions to execute the wfActionId or
+        // not action Id is set on the CSV/Import select box then use the old
+        // checking method
+        final boolean live = Config.getBooleanProperty(
+                "PUBLISH_CSV_IMPORTED_CONTENT_AUTOMATICALLY", false);
+        final Optional<WorkflowAction> workflowActionSaveOpt =
+                workflowAPI.findActionMappedBySystemActionContentlet
+                        (contentlet, WorkflowAPI.SystemAction.NEW, user);
+        final List<Category> categoryList = new ArrayList<>(categories);
+
+        if (workflowActionSaveOpt.isPresent()) {
+
+            if (workflowActionSaveOpt.get().hasSaveActionlet()) {
+
+                Logger.debug(ImportUtil.class,
+                        ()-> "Importing a contentlet with the save action: "
+                        + workflowActionSaveOpt.get().getName());
+                final Contentlet savedContent = workflowAPI.fireContentWorkflow
+                        (contentlet, new ContentletDependencies.Builder()
+                                .workflowActionId(workflowActionSaveOpt.get().getId())
+                                .relationships(contentletRelationships).categories(new ArrayList<>(categoryList))
+                                .permissions(contentTypePermissions).modUser(user).build());
+                return live && !workflowActionSaveOpt.get().hasPublishActionlet()?
+                        runWorkflowPublishIfCould(contentletRelationships,
+                                categoryList, contentTypePermissions, user, savedContent):
+                        savedContent;
+            } else {
+
+                contentlet.setActionId(workflowActionSaveOpt.get().getId());
+            }
+        }
+
+        if (null == contentlet.getActionId()) {
+            contentlet.setProperty(Contentlet.DISABLE_WORKFLOW, true); // it is needed to avoid recursive call
+        }
+        contentlet.setProperty(Contentlet.DONT_VALIDATE_ME, true);
+        final Contentlet contentletSaved = conAPI.checkin(contentlet, contentletRelationships,
+                categoryList, contentTypePermissions,
+                user, false);
+
+        if (live) {
+            APILocator.getContentletAPI().publish(contentletSaved, user, false);
+        }
+        return contentletSaved;
+    }
+
+    private static Contentlet runWorkflowPublishIfCould(final ContentletRelationships contentletRelationships,
+                                                 final List<Category>   categories,
+                                                 final List<Permission> permissions,
+                                                 final User user,
+                                                 final Contentlet savedContent) throws DotDataException, DotSecurityException {
+
+        final Optional<WorkflowAction> workflowActionPublishOpt =
+                workflowAPI.findActionMappedBySystemActionContentlet
+                        (savedContent, WorkflowAPI.SystemAction.PUBLISH, user);
+
+        if (workflowActionPublishOpt.isPresent()) {
+
+            if (workflowActionPublishOpt.get().hasPublishActionlet()) {
+
+                Logger.debug(ImportUtil.class,
+                        () -> "Importing a contentlet with the publish action: "
+                        + workflowActionPublishOpt.get().getName());
+                return workflowAPI.fireContentWorkflow
+                        (savedContent, new ContentletDependencies.Builder()
+                                .workflowActionId(workflowActionPublishOpt.get().getId())
+                                .relationships(contentletRelationships).categories(categories)
+                                .permissions(permissions).modUser(user).build());
+            } else {
+
+                savedContent.setActionId(workflowActionPublishOpt.get().getId());
+            }
+        }
+
+        if (null == savedContent.getActionId()) {
+            savedContent.setProperty(Contentlet.DISABLE_WORKFLOW, true); // it is needed to avoid recursive call
+        }
+
+        conAPI.publish(savedContent, user, false);
+        return savedContent;
+    }
     /**
      *
      * @param csvRelationshipRecordsParentOnly
@@ -1648,12 +1753,12 @@ public class ImportUtil {
         return ret.toString();
     }
 
-	/**
-	 * Escape lucene reserved characters
-	 * 
-	 * @param text
-	 * @return String
-	 */
+    /**
+     * Escape lucene reserved characters
+     *
+     * @param text
+     * @return String
+     */
     private static String escapeLuceneSpecialCharacter(String text){
         text = text.replaceAll("\\[","\\\\[").replaceAll("\\]","\\\\]");
         text = text.replaceAll("\\{","\\\\{").replaceAll("\\}","\\\\}");
@@ -1667,6 +1772,7 @@ public class ImportUtil {
 
         return text;
     }
+
 
     /**
      * 
@@ -1802,7 +1908,6 @@ public class ImportUtil {
                 field.getFieldType().equals( Field.FieldType.BUTTON.toString() ) ||
                 field.getFieldType().equals( Field.FieldType.LINE_DIVIDER.toString() ) ||
                 field.getFieldType().equals( Field.FieldType.TAB_DIVIDER.toString() ) ||
-                field.getFieldType().equals( Field.FieldType.BINARY.toString() ) ||
                 field.getFieldType().equals( Field.FieldType.PERMISSIONS_TAB.toString()) ||
                 field.getFieldType().equals(Field.FieldType.COLUMN.toString())      ||  
                 field.getFieldType().equals(Field.FieldType.ROW.toString())    

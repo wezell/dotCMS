@@ -386,7 +386,7 @@ public class DesignTemplateUtil {
             String parseContainerArguments = matcher.group();
 
             if (parseContainerArguments != null) {
-				String[] splitArguments = parseContainerArguments.split(",");
+				String[] splitArguments = parseContainerArguments.split("'\\s*,");
 				String id = cleanId(splitArguments[0]);
 				String uuid = splitArguments.length > 1 ? cleanId(splitArguments[1]) : ParseContainer.DEFAULT_UUID_VALUE;
 				try {
@@ -419,8 +419,13 @@ public class DesignTemplateUtil {
     	final IdentifierAPI identifierAPI = APILocator.getIdentifierAPI();
     	final Optional<ShortyId> shortyId = shortyIdAPI.getShorty(containerId);
 
-		return shortyId.isPresent() && shortyId.get().subType == ShortType.CONTAINER?
-				containerId: identifierAPI.find(containerId).getParentPath();
+    	if (!shortyId.isPresent()) {
+    		return containerId;
+		}
+
+		return shortyId.get().subType == ShortType.CONTAINER ?
+				containerId:
+				FileAssetContainerUtil.getInstance().getFullPath(identifierAPI.find(containerId).getParentPath());
 	}
 
 	private static String cleanId(final String identifier) {

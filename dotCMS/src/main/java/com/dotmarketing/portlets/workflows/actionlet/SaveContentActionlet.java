@@ -2,13 +2,18 @@ package com.dotmarketing.portlets.workflows.actionlet;
 
 import com.dotcms.business.WrapInTransaction;
 import com.dotmarketing.business.APILocator;
+import com.dotmarketing.exception.DotDataException;
+import com.dotmarketing.exception.DotSecurityException;
 import com.dotmarketing.portlets.contentlet.business.ContentletAPI;
+import com.dotmarketing.portlets.contentlet.business.DotContentletValidationException;
 import com.dotmarketing.portlets.contentlet.model.Contentlet;
+import com.dotmarketing.portlets.contentlet.model.ContentletDependencies;
 import com.dotmarketing.portlets.workflows.model.*;
 import com.dotmarketing.util.Logger;
 import com.dotmarketing.util.UtilMethods;
 import com.google.common.annotations.VisibleForTesting;
 
+import com.liferay.portal.model.User;
 import java.util.List;
 import java.util.Map;
 
@@ -54,36 +59,71 @@ public class SaveContentActionlet extends WorkFlowActionlet {
 
 			final Contentlet contentlet =
 					processor.getContentlet();
+			final User user = processor.getUser();
 
 			Logger.debug(this,
-					"Saving the content of the contentlet: " + contentlet.getIdentifier());
+					()->"Saving the content of the contentlet: " + contentlet.getIdentifier());
 
-			final boolean    isNew              = this.isNew (contentlet);
-			final Contentlet checkoutContentlet = isNew? contentlet:
-					this.contentletAPI.checkout(contentlet.getInode(), processor.getUser(), false);
-
-			if (!isNew) {
-
-				final String inode = checkoutContentlet.getInode();
-				this.contentletAPI.copyProperties(checkoutContentlet, contentlet.getMap());
-				checkoutContentlet.setInode(inode);
-			}
+			final Contentlet checkoutContentlet = this.checkout(contentlet, processor.getUser());
 
 			checkoutContentlet.setProperty(Contentlet.WORKFLOW_IN_PROGRESS, Boolean.TRUE);
 
-			final Contentlet contentletNew = (null != processor.getContentletDependencies())?
-					this.contentletAPI.checkin(checkoutContentlet, processor.getContentletDependencies()):
-					this.contentletAPI.checkin(checkoutContentlet, processor.getUser(), false);
+			final ContentletDependencies contentletDependencies = processor.getContentletDependencies();
+			final boolean respectFrontendPermission = contentletDependencies != null ?
+					contentletDependencies.isRespectAnonymousPermissions() : user.isFrontendUser();
+
+			final Contentlet contentletNew = (null != contentletDependencies)?
+					this.contentletAPI.checkin(checkoutContentlet, contentletDependencies):
+					this.contentletAPI.checkin(checkoutContentlet, processor.getUser(), respectFrontendPermission);
+
+			this.setIndexPolicy(contentlet, contentletNew);
+			this.setSpecialVariables(contentlet, contentletNew);
 
 			processor.setContentlet(contentletNew);
 
 			Logger.debug(this,
-					"content version already saved for the contentlet: " + contentlet.getIdentifier());
+					()->"content version already saved for the contentlet: " + contentlet.getIdentifier());
 		} catch (Exception e) {
-
-			Logger.error(this.getClass(),e.getMessage(),e);
-			throw new  WorkflowActionFailureException(e.getMessage(),e);
+            if (e instanceof DotContentletValidationException){
+                Logger.warnAndDebug(this.getClass(),e.getMessage(),e);
+            } else{
+                Logger.error(this.getClass(),e.getMessage(),e);
+            }
+            throw new  WorkflowActionFailureException(e.getMessage(),e);
 		}
+	}
+
+	public Contentlet checkout (final Contentlet contentlet, final User user)
+			throws DotSecurityException, DotDataException {
+
+		final boolean    isNew              = this.isNew (contentlet);
+		final Contentlet checkoutContentlet = isNew? contentlet:
+				this.contentletAPI.checkout(contentlet.getInode(), user, false);
+
+		if (!isNew) {
+
+			final String inode = checkoutContentlet.getInode();
+			this.contentletAPI.copyProperties(checkoutContentlet, contentlet.getMap());
+			this.setIndexPolicy(contentlet, checkoutContentlet);
+			checkoutContentlet.setInode(inode);
+			this.setSpecialVariables (contentlet, checkoutContentlet);
+		}
+
+		return checkoutContentlet;
+	}
+
+	private void setSpecialVariables(final Contentlet contentlet, final Contentlet checkoutContentlet) {
+
+		if (contentlet.getMap().containsKey(Contentlet.VALIDATE_EMPTY_FILE)) {
+
+			checkoutContentlet.getMap().put(Contentlet.VALIDATE_EMPTY_FILE, contentlet.getMap().get(Contentlet.VALIDATE_EMPTY_FILE));
+		}
+	}
+
+	private void setIndexPolicy (final Contentlet originContentlet, final Contentlet newContentlet) {
+
+		newContentlet.setIndexPolicy(originContentlet.getIndexPolicy());
+		newContentlet.setIndexPolicyDependencies(originContentlet.getIndexPolicyDependencies());
 	}
 
 	private boolean isNew(final Contentlet contentlet) {

@@ -110,15 +110,7 @@
     <portlet>
         <portlet-name>templates</portlet-name>
         <display-name>Templates Manager</display-name>
-        <portlet-class>com.liferay.portlet.StrutsPortlet</portlet-class>
-        <init-param>
-            <name>view-action</name>
-            <value>/ext/templates/view_templates</value>
-        </init-param>
-
-
-        <resource-bundle>com.liferay.portlet.StrutsResourceBundle</resource-bundle>
-
+        <portlet-class>com.dotcms.spring.portlet.PortletController</portlet-class>
     </portlet>
 
     <portlet>
@@ -253,17 +245,6 @@
         <init-param>
             <name>view-action</name>
             <value>/ext/structure/view_structure</value>
-        </init-param>
-        <resource-bundle>com.liferay.portlet.StrutsResourceBundle</resource-bundle>
-    </portlet>
-
-    <portlet>
-        <portlet-name>forms</portlet-name>
-        <display-name>Form Handler</display-name>
-        <portlet-class>com.liferay.portlet.StrutsPortlet</portlet-class>
-        <init-param>
-            <name>view-action</name>
-            <value>/ext/formhandler/view_form</value>
         </init-param>
         <resource-bundle>com.liferay.portlet.StrutsResourceBundle</resource-bundle>
     </portlet>
@@ -502,9 +483,27 @@
     </portlet>
 
     <portlet>
+        <portlet-name>apps</portlet-name>
+        <display-name>Apps</display-name>
+        <portlet-class>com.dotcms.spring.portlet.PortletController</portlet-class>
+    </portlet>
+
+    <portlet>
         <portlet-name>embedded-dashboard</portlet-name>
         <display-name>Embedded Analytics Dashboard</display-name>
         <portlet-class>com.dotcms.rest.JSPPortlet</portlet-class>
+    </portlet>
+
+    <portlet>
+        <portlet-name>forms</portlet-name>
+        <display-name>Forms</display-name>
+        <portlet-class>com.dotcms.spring.portlet.PortletController</portlet-class>
+    </portlet>
+    
+    <portlet>
+        <portlet-name>starter</portlet-name>
+        <display-name>Getting Started</display-name>
+        <portlet-class>com.dotcms.spring.portlet.PortletController</portlet-class>
     </portlet>
 
 </portlet-app>

@@ -5,6 +5,8 @@ import com.dotcms.repackage.javax.portlet.ActionRequest;
 import com.dotcms.repackage.javax.portlet.ActionResponse;
 import com.dotcms.repackage.javax.portlet.PortletConfig;
 import com.dotcms.repackage.javax.portlet.WindowState;
+import com.dotcms.repackage.org.apache.struts.action.ActionForm;
+import com.dotcms.repackage.org.apache.struts.action.ActionMapping;
 import com.dotmarketing.beans.Host;
 import com.dotmarketing.beans.Identifier;
 import com.dotmarketing.beans.Inode;
@@ -50,8 +52,6 @@ import java.util.Iterator;
 import java.util.List;
 import javax.servlet.http.HttpServletRequest;
 import org.apache.commons.beanutils.BeanUtils;
-import org.apache.struts.action.ActionForm;
-import org.apache.struts.action.ActionMapping;
 
 /**
  * This Struts action provides users the ability to interact with Menu Links in
@@ -183,7 +183,7 @@ public class EditLinkAction extends DotPortletAction implements DotPortletAction
 					if (link.isLocked()) {
 					    versionableAPI.setLocked(link, false, user);
 					}
-					_sendToReferral(req, res, referer);
+					_sendToReferral(req, res, referer+ "&p_p_state="+ WindowState.MAXIMIZED + "&p_p_id=site-browser&p_p_action=1");
 				}
 			} catch (Exception ae) {
 				_handleException(ae, req);
@@ -358,7 +358,7 @@ public class EditLinkAction extends DotPortletAction implements DotPortletAction
 				_handleException(ae, req);
 				return;
 			}
-			_sendToReferral(req, res, referer);
+			_sendToReferral(req, res, referer + "&p_p_state="+ WindowState.MAXIMIZED + "&p_p_id=site-browser&p_p_action=1");
 
 		}
 		/*

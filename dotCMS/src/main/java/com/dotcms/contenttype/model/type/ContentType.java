@@ -2,6 +2,7 @@ package com.dotcms.contenttype.model.type;
 
 import com.dotcms.contenttype.model.field.Field;
 import com.dotcms.repackage.com.google.common.base.Preconditions;
+import com.dotmarketing.util.Logger;
 import com.google.common.collect.ImmutableList;
 import com.dotcms.util.CollectionsUtils;
 import com.dotmarketing.beans.Host;
@@ -13,12 +14,16 @@ import com.dotmarketing.portlets.folders.business.FolderAPI;
 import com.dotmarketing.portlets.folders.model.Folder;
 import com.dotmarketing.portlets.structure.model.Structure;
 import com.dotmarketing.util.Config;
+import com.dotmarketing.util.UtilMethods;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonSubTypes.Type;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import com.fasterxml.jackson.annotation.JsonTypeInfo.Id;
 import com.google.common.collect.ImmutableMap;
+
+import io.vavr.control.Try;
+
 import org.apache.commons.lang.StringUtils;
 import org.apache.commons.lang.time.DateUtils;
 import org.elasticsearch.common.Nullable;
@@ -43,6 +48,7 @@ import java.util.stream.Collectors;
         @Type(value = WidgetContentType.class),
         @Type(value = VanityUrlContentType.class),
         @Type(value = KeyValueContentType.class),
+        @Type(value = DotAssetContentType.class)
 })
 public abstract class ContentType implements Serializable, Permissionable, ContentTypeIf {
 
@@ -157,29 +163,36 @@ public abstract class ContentType implements Serializable, Permissionable, Conte
   public List<Field> fields() {
     if (innerFields == null) {
       try {
-
         innerFields = APILocator.getContentTypeFieldAPI().byContentTypeId(this.id());
-      } catch (DotDataException e) {
-        throw new DotStateException("unable to load fields:" + e.getMessage(), e);
+      } catch (final DotDataException e) {
+        final String errorMsg = String.format("Unable to load fields for Content Type '%s' [%s]: %s", this.name(),
+                this.id(), e.getMessage());
+        Logger.error(this, errorMsg);
+        throw new DotStateException(errorMsg, e);
       }
     }
     return innerFields;
   }
 
-  
   /**
-   * This method will return a list of fields that are of a specific Field class
-   * e.g. <code>contentType.fields(BinaryField.class);</code> will return all the binary fields
-   * on that content type;
+   * This method will return a list of fields that are of a specific Field class e.g.
+   * <code>contentType.fields(BinaryField.class);</code> will return all the binary fields on that
+   * content type. You can also pass in the ImmutableClass, e.g.
+   * <code>contentType.fields(ImmutableBinaryField.class);</code> will return all the binary fields as
+   * well
+   * 
    * @param clazz
    * @return
    */
   @JsonIgnore
   @Value.Lazy
   public List<Field> fields(final Class<? extends Field> clazz) {
+    final String clazzName = clazz.getName().replace(".Immutable",".");
     return this.fields()
-    .stream()
-    .filter(field -> clazz.isInstance(field))
+        .stream()
+        .filter(field -> 
+        field.getClass().getName().replace(".Immutable",".").equals(clazzName) 
+    )
     .collect(Collectors.toList());
   }
 
@@ -240,19 +253,43 @@ public abstract class ContentType implements Serializable, Permissionable, Conte
   @Value.Lazy
   public Permissionable getParentPermissionable() {
     try{
-      if (FolderAPI.SYSTEM_FOLDER.equals(this.folder())) {
-        PermissionableProxy host = new PermissionableProxy();
-        host.setIdentifier(this.host());
-        host.setInode(this.host());
-        host.setType(Host.class.getCanonicalName());
-        return host;
+      Permissionable parent = null;
+      if (UtilMethods.isSet(this.folder()) && !FolderAPI.SYSTEM_FOLDER.equals(this.folder())) {
+        parent= APILocator.getFolderAPI().find(folder(), APILocator.systemUser(), false);
+      }else if(UtilMethods.isSet(host()) && !host().equals(Host.SYSTEM_HOST)){
+        parent= APILocator.getHostAPI().find(host(), APILocator.systemUser(), false);
       } else {
-        return APILocator.getFolderAPI().find(this.folder(), APILocator.systemUser(), false);
+        parent= APILocator.systemHost();
       }
+      if(parent==null) {
+        parent= getProxyPermissionable();
+      }
+      return parent;
     }catch (Exception e) {
       throw new DotRuntimeException(e.getMessage(), e);
     }
   }
+  
+  /**
+   * this is only needed at startup when there is no
+   * data and the api calls to get the pemissionableParent return null;
+   * @return
+   */
+  private Permissionable getProxyPermissionable() {
+    final PermissionableProxy proxy = new PermissionableProxy();
+    if (FolderAPI.SYSTEM_FOLDER.equals(this.folder())) {
+      proxy.setIdentifier(this.host());
+      proxy.setInode(this.host());
+      proxy.setType(Host.class.getCanonicalName());
+    } else {
+      proxy.setIdentifier(this.folder());
+      proxy.setInode(this.folder());
+      proxy.setType(Folder.class.getCanonicalName());
+    }
+    return proxy;
+  }
+  
+  
 
   @Override
   public boolean isParentPermissionable() {
@@ -281,7 +318,8 @@ public abstract class ContentType implements Serializable, Permissionable, Conte
           CollectionsUtils.imap(
                   BaseContentType.CONTENT,   Config.getBooleanProperty("DEFAULT_CONTENT_TO_DEFAULT_LANGUAGE",false),
                   BaseContentType.WIDGET,    Config.getBooleanProperty("DEFAULT_WIDGET_TO_DEFAULT_LANGUAGE", false),
-                  BaseContentType.FILEASSET, Config.getBooleanProperty("DEFAULT_FILE_TO_DEFAULT_LANGUAGE",false)
+                  BaseContentType.FILEASSET, Config.getBooleanProperty("DEFAULT_FILE_TO_DEFAULT_LANGUAGE",false),
+                  BaseContentType.PERSONA,   Config.getBooleanProperty("DEFAULT_PERSONA_TO_DEFAULT_LANGUAGE",false)
                   );
 
   @JsonIgnore

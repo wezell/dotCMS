@@ -1,14 +1,14 @@
 package com.dotcms.rest.api.v1.authentication;
 
 import com.dotcms.api.web.HttpServletRequestThreadLocal;
-import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
-import com.dotcms.rest.exception.ValidationException;
 import com.dotcms.repackage.javax.validation.constraints.NotNull;
 import com.dotcms.repackage.org.hibernate.validator.constraints.Length;
 import com.dotcms.rest.api.Validated;
+import com.dotcms.rest.exception.ValidationException;
 import com.dotcms.util.HttpRequestDataUtil;
 import com.dotmarketing.util.SecurityLogger;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 
 @JsonDeserialize(builder = AuthenticationForm.Builder.class)
 public class AuthenticationForm extends Validated {
@@ -22,6 +22,8 @@ public class AuthenticationForm extends Validated {
 
     private  final boolean rememberMe;
 
+    private  final boolean backEndLogin;
+    
     private final String language;
 
     private final String country;
@@ -45,13 +47,16 @@ public class AuthenticationForm extends Validated {
     public String getLanguage() {
         return language;
     }
-
+    public boolean isBackEndLogin() {
+      return backEndLogin;
+  }
     private AuthenticationForm(Builder builder) {
         userId = builder.userId;
         password = builder.password;
         rememberMe = builder.rememberMe;
         language = builder.language;
         country  = builder.country;
+        backEndLogin=builder.backEndLogin;
         try {
         	checkValid();
         }catch(ValidationException ve){
@@ -66,6 +71,7 @@ public class AuthenticationForm extends Validated {
         @JsonProperty(required = true) private String userId; // not present on create
         @JsonProperty(required = true) private String password;
         @JsonProperty private boolean rememberMe;
+        @JsonProperty private boolean backEndLogin=false;
         @JsonProperty private String language;
         @JsonProperty private String country;
 
@@ -83,7 +89,11 @@ public class AuthenticationForm extends Validated {
             this.rememberMe = rememberMe;
             return this;
         }
-
+        
+        public Builder backEndLogin(boolean backEndLogin) {
+          this.backEndLogin = backEndLogin;
+          return this;
+        }
         public Builder language(String language) {
             this.language = language;
             return this;

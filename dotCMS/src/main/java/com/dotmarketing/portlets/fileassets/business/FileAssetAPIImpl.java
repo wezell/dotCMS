@@ -1,5 +1,23 @@
 package com.dotmarketing.portlets.fileassets.business;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.ConnectException;
+import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.zip.GZIPInputStream;
+
+import com.dotcms.exception.ExceptionUtil;
+import com.dotcms.repackage.com.google.common.annotations.VisibleForTesting;
+import com.dotcms.util.MimeTypeUtils;
+import com.dotmarketing.business.*;
+import com.dotmarketing.portlets.contentlet.business.ContentletCache;
+import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream;
 import com.dotcms.api.system.event.Payload;
 import com.dotcms.api.system.event.SystemEventType;
 import com.dotcms.api.system.event.SystemEventsAPI;
@@ -7,11 +25,12 @@ import com.dotcms.api.system.event.Visibility;
 import com.dotcms.api.system.event.verifier.ExcludeOwnerVerifierBean;
 import com.dotcms.business.CloseDBIfOpened;
 import com.dotcms.business.WrapInTransaction;
+import com.dotcms.contenttype.model.type.BaseContentType;
+import com.dotcms.rendering.velocity.viewtools.content.FileAssetMap;
 import com.dotcms.repackage.org.apache.commons.io.IOUtils;
 import com.dotcms.tika.TikaUtils;
 import com.dotmarketing.beans.Host;
 import com.dotmarketing.beans.Identifier;
-import com.dotmarketing.business.*;
 import com.dotmarketing.cache.FieldsCache;
 import com.dotmarketing.exception.DotDataException;
 import com.dotmarketing.exception.DotRuntimeException;
@@ -26,20 +45,15 @@ import com.dotmarketing.portlets.structure.factories.FieldFactory;
 import com.dotmarketing.portlets.structure.model.Field;
 import com.dotmarketing.portlets.structure.model.Structure;
 import com.dotmarketing.util.Config;
+import com.dotmarketing.util.ConfigUtils;
 import com.dotmarketing.util.InodeUtils;
 import com.dotmarketing.util.Logger;
 import com.dotmarketing.util.UtilMethods;
 import com.liferay.portal.model.User;
 import com.liferay.util.FileUtil;
 import com.liferay.util.StringPool;
-import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream;
-
-import java.io.*;
-import java.nio.file.Files;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.zip.GZIPInputStream;
+import io.vavr.control.Try;
+import org.apache.velocity.exception.ResourceNotFoundException;
 
 /**
  * This class is a bridge impl that will support the older
@@ -56,15 +70,38 @@ public class FileAssetAPIImpl implements FileAssetAPI {
 	final ContentletAPI contAPI;
 	final PermissionAPI perAPI;
 	private final IdentifierAPI identifierAPI;
+	private final FileAssetFactory fileAssetFactory;
+	private final ContentletCache contentletCache;
 
 	public FileAssetAPIImpl() {
-
-		contAPI = APILocator.getContentletAPI();
-		perAPI = APILocator.getPermissionAPI();
-		systemEventsAPI = APILocator.getSystemEventsAPI();
-		identifierAPI   = APILocator.getIdentifierAPI();
+	    this(
+	    		APILocator.getContentletAPI(),
+				APILocator.getPermissionAPI(),
+				APILocator.getSystemEventsAPI(),
+				APILocator.getIdentifierAPI(),
+				FactoryLocator.getFileAssetFactory(),
+				CacheLocator.getContentletCache()
+		);
 	}
 
+	@VisibleForTesting
+    public FileAssetAPIImpl(
+			final ContentletAPI contAPI,
+			final PermissionAPI perAPI,
+			final SystemEventsAPI systemEventsAPI,
+			final IdentifierAPI identifierAPI,
+			final FileAssetFactory fileAssetFactory,
+			final ContentletCache contentletCache) {
+
+        this.contAPI = contAPI;
+        this.perAPI = perAPI;
+        this.systemEventsAPI = systemEventsAPI;
+        this.identifierAPI   = identifierAPI;
+        this.fileAssetFactory = fileAssetFactory;
+        this.contentletCache = contentletCache;
+    }
+	
+	
 	/*
 	 * This method will allow you to pass a file where the identifier is not set.  It the file exists on the set host/path
 	 * the identifier and all necessary data will be set in order to checkin as a new version of the existing file. The method will
@@ -86,19 +123,45 @@ public class FileAssetAPIImpl implements FileAssetAPI {
 	}
 	 */
 	@CloseDBIfOpened
-	public List<FileAsset> findFileAssetsByFolder(Folder parentFolder, User user, boolean respectFrontendRoles) throws DotDataException,
-			DotSecurityException {
-		List<FileAsset> assets = null;
+	public List<FileAsset> findFileAssetsByFolder(
+			final Folder parentFolder,
+			final User user,
+			final boolean respectFrontendRoles) throws DotDataException, DotSecurityException {
+
 		try{
-			assets = fromContentlets(perAPI.filterCollection(contAPI.search("+structureType:" + Structure.STRUCTURE_TYPE_FILEASSET+" +conFolder:" + parentFolder.getInode(), -1, 0, null , user, respectFrontendRoles),
-					PermissionAPI.PERMISSION_READ, respectFrontendRoles, user));
+		    return fromContentlets(contAPI.search(
+					"+structureType:" + Structure.STRUCTURE_TYPE_FILEASSET + " +conFolder:" + parentFolder.getInode(),
+					-1, 0, null, user, respectFrontendRoles));
+		} catch (DotRuntimeException e) {
+			if ( ExceptionUtil.causedBy(e, ConnectException.class)) {
+				Logger.warnEveryAndDebug(FileAssetAPIImpl.class, e.getMessage(), e, 5000);
+				
+				return findFileAssetsByDB(FileAssetSearcher.builder().folder(parentFolder).user(user).respectFrontendRoles(respectFrontendRoles).build());
+			} else {
+				throw e;
+			}
+		} catch (DotSecurityException | DotDataException e) {
+			throw e;
 		} catch (Exception e) {
 			Logger.error(this.getClass(), e.getMessage(), e);
 			throw new DotRuntimeException(e.getMessage(), e);
 		}
-		return assets;
 
 	}
+
+    @Override
+    @CloseDBIfOpened
+    public List<FileAsset> findFileAssetsByDB(FileAssetSearcher searcher) {
+
+        return Try.of(() -> fromContentlets(fileAssetFactory.findByDB(searcher)))
+                        .getOrElseThrow(e -> e instanceof RuntimeException ? (RuntimeException) e : new DotRuntimeException(e));
+
+    }
+	
+	
+
+	
+
 
 	@CloseDBIfOpened
 	public List<FileAsset> findFileAssetsByHost(Host parentHost, User user, boolean respectFrontendRoles) throws DotDataException,
@@ -106,6 +169,9 @@ public class FileAssetAPIImpl implements FileAssetAPI {
 		List<FileAsset> assets = null;
 		try{
 			Folder parentFolder = APILocator.getFolderAPI().find(FolderAPI.SYSTEM_FOLDER, user, false);
+			
+			
+			
 			assets = fromContentlets(perAPI.filterCollection(contAPI.search("+conHost:" +parentHost.getIdentifier() +" +structureType:" + Structure.STRUCTURE_TYPE_FILEASSET+" +conFolder:" + parentFolder.getInode(), -1, 0, null , user, respectFrontendRoles),
 					PermissionAPI.PERMISSION_READ, respectFrontendRoles, user));
 		} catch (Exception e) {
@@ -207,43 +273,47 @@ public class FileAssetAPIImpl implements FileAssetAPI {
 	}
 
 	@CloseDBIfOpened
-	public FileAsset fromContentlet(Contentlet con) throws DotStateException {
-		if (con == null) {
-			throw new DotStateException("Contentlet : is null");
+	public FileAsset fromContentlet(final Contentlet con) throws DotStateException {
+		if (con == null || con.getInode() == null) {
+			throw new DotStateException("Contentlet is null");
 		}
-		if (con.getStructure().getStructureType() != Structure.STRUCTURE_TYPE_FILEASSET) {
+
+		if (!con.isFileAsset()) {
 			throw new DotStateException("Contentlet : " + con.getInode() + " is not a FileAsset");
 		}
 
-		FileAsset fa = new FileAsset();
-		fa.setStructureInode(con.getStructureInode());
-		try {
-			contAPI.copyProperties((Contentlet) fa, con.getMap());
-		} catch (Exception e) {
-			throw new DotStateException("File Copy Failed :" + e.getMessage(), e);
+		if(con instanceof FileAsset) {
+			return (FileAsset) con;
 		}
-		fa.setHost(con.getHost());
+
+		final FileAsset fileAsset = new FileAsset();
+		fileAsset.setContentTypeId(con.getContentTypeId());
+		try {
+			contAPI.copyProperties(fileAsset, con.getMap());
+		} catch (Exception e) {
+			throw new DotStateException("Content -> FileAsset Copy Failed :" + e.getMessage(), e);
+		}
+		fileAsset.setHost(con.getHost());
 		if(UtilMethods.isSet(con.getFolder())){
 			try{
-				Identifier ident = APILocator.getIdentifierAPI().find(con);
-				User systemUser = APILocator.getUserAPI().getSystemUser();
-				Host host = APILocator.getHostAPI().find(con.getHost(), systemUser , false);
-				Folder folder = APILocator.getFolderAPI().findFolderByPath(ident.getParentPath(), host, systemUser, false);
-				fa.setFolder(folder.getInode());
+				final Identifier ident = APILocator.getIdentifierAPI().find(con);
+				final Host host = APILocator.getHostAPI().find(con.getHost(), APILocator.systemUser() , false);
+				final Folder folder = APILocator.getFolderAPI().findFolderByPath(ident.getParentPath(), host, APILocator.systemUser(), false);
+				fileAsset.setFolder(folder.getInode());
 			}catch(Exception e){
 				try{
-					User systemUser = APILocator.getUserAPI().getSystemUser();
-					Host host = APILocator.getHostAPI().find(con.getHost(), systemUser , false);
-					Folder folder = APILocator.getFolderAPI().find(con.getFolder(), systemUser, false);
-					fa.setFolder(folder.getInode());
+					final Folder folder = APILocator.getFolderAPI().find(con.getFolder(), APILocator.systemUser(), false);
+					fileAsset.setFolder(folder.getInode());
 				}catch(Exception e1){
 					Logger.warn(this, "Unable to convert contentlet to file asset " + con, e1);
 				}
 			}
 		}
-		return fa;
+		this.contentletCache.add(fileAsset);
+		return fileAsset;
 	}
-
+	
+	
 	public List<FileAsset> fromContentlets(final List<Contentlet> contentlets) {
 		final List<FileAsset> fileAssets = new ArrayList<>();
 		for (Contentlet con : contentlets) {
@@ -260,6 +330,22 @@ public class FileAssetAPIImpl implements FileAssetAPI {
 		}
 		return fileAssets;
 
+	}
+
+	@CloseDBIfOpened
+	public FileAssetMap fromFileAsset(final FileAsset fileAsset) throws DotStateException {
+		if (!fileAsset.isLoaded()) {
+		    //Force to pre-load
+			fileAsset.load();
+		}
+		try {
+			final FileAssetMap fileAssetMap = new FileAssetMap(fileAsset);
+			CacheLocator.getContentletCache().add(fileAsset);
+			// We cache the original contentlet that was forced to pre-load its values. That's the state we want to maintain.
+			return fileAssetMap;
+		} catch (Exception e) {
+			throw new DotStateException(e);
+		}
 	}
 
 	public boolean isFileAsset(Contentlet con)  {
@@ -292,7 +378,7 @@ public class FileAssetAPIImpl implements FileAssetAPI {
 			// if we're looking at a folder or the fileAssetIdentifier wasn't found. It doesn't exist for sure.
 			return false;
 		}
-		//Beyond this point we know something matches that path for that host.
+		//Beyond this point we know something matches the path for that host.
 		if (!UtilMethods.isSet(identifier)) {
 			//it's a brand new contentlet we're dealing with
 			//At this point we know it DOES exist, and since we're dealing with a fresh contentlet that hasn't even been inserted yet (We don't need to worry about lang).
@@ -364,7 +450,7 @@ public class FileAssetAPIImpl implements FileAssetAPI {
 
 	public String getRelativeAssetPath(FileAsset fa) {
 		String _inode = fa.getInode();
-		return getRelativeAssetPath(_inode, fa.getFileName());
+		return getRelativeAssetPath(_inode, fa.getUnderlyingFileName());
 	}
 
 	private  String getRelativeAssetPath(String inode, String fileName) {
@@ -487,7 +573,12 @@ public class FileAssetAPIImpl implements FileAssetAPI {
 			throws DotDataException, DotSecurityException {
 		List<FileAsset> assets = null;
 		try{
-			assets = fromContentlets(perAPI.filterCollection(contAPI.search("+structureType:" + Structure.STRUCTURE_TYPE_FILEASSET+" +conFolder:" + parentFolder.getInode() + (live?" +live:true":""), -1, 0, sortBy , user, respectFrontendRoles),
+			final StringBuffer query = new StringBuffer();
+			query.append("+baseType:" + BaseContentType.FILEASSET.getType())
+					.append(" +conFolder:" + parentFolder.getInode())
+					.append(" +conHost:" + parentFolder.getHostId())
+					.append(live?" +live:true":"");
+			assets = fromContentlets(perAPI.filterCollection(contAPI.search(query.toString(), -1, 0, sortBy , user, respectFrontendRoles),
 					PermissionAPI.PERMISSION_READ, respectFrontendRoles, user));
 		} catch (Exception e) {
 			Logger.error(this.getClass(), e.getMessage(), e);
@@ -511,6 +602,16 @@ public class FileAssetAPIImpl implements FileAssetAPI {
 		return assets;
 	}
 
+  @Override
+  @CloseDBIfOpened
+  public FileAsset find(final String inode, final User user, final boolean respectFrontendRoles)
+      throws DotDataException, DotSecurityException {
+
+    return fromContentlet(contAPI.find(inode, user, respectFrontendRoles));
+
+  }
+	
+	
 	public String getRealAssetPath(String inode, String fileName, String ext) {
         String _inode = inode;
         String path = "";
@@ -534,6 +635,13 @@ public class FileAssetAPIImpl implements FileAssetAPI {
 
     }
 
+	/**
+	 * Returns the file on the filesystem that backup the fileAsset
+	 * @param inode
+	 * @param fileName generally speaking this method is expected to be called using the Underlying File Name property
+	 * e.g.   getRealAssetPath(inode, fileAsset.getUnderlyingFileName())
+	 * @return
+	 */
 	@Override
 	public String getRealAssetPath(String inode, String fileName) {
 
@@ -552,7 +660,8 @@ public class FileAssetAPIImpl implements FileAssetAPI {
 	 */
 	public String getRelativeAssetsRootPath() {
         String path = "";
-        path = Config.getStringProperty("ASSET_PATH", DEFAULT_RELATIVE_ASSET_PATH);
+        path = Try.of(() -> Config.getStringProperty("ASSET_PATH", DEFAULT_RELATIVE_ASSET_PATH))
+                .getOrElse(DEFAULT_RELATIVE_ASSET_PATH);
         return path;
     }
 
@@ -562,13 +671,7 @@ public class FileAssetAPIImpl implements FileAssetAPI {
      * @return the root folder of where assets are stored
      */
     public String getRealAssetsRootPath() {
-        String realPath = Config.getStringProperty("ASSET_REAL_PATH");
-        if (UtilMethods.isSet(realPath) && !realPath.endsWith(java.io.File.separator))
-            realPath = realPath + java.io.File.separator;
-        if (!UtilMethods.isSet(realPath))
-            return FileUtil.getRealPath(getRelativeAssetsRootPath());
-        else
-            return realPath;
+        return ConfigUtils.getAbsoluteAssetsRootPath();
     }
 
 	public String getRealAssetPath(String inode) {
@@ -595,11 +698,21 @@ public class FileAssetAPIImpl implements FileAssetAPI {
     }
 
     @Override
-    public File getContentMetadataFile(String inode) {
+    public File getContentMetadataFile(final String inode) {
         return new File(getRealAssetsRootPath()+File.separator+
                 inode.charAt(0)+File.separator+inode.charAt(1)+File.separator+inode+File.separator+
                 "metaData"+File.separator+"content");
     }
+
+	@Override
+	public File getContentMetadataFile(final String inode, final String fileName) {
+
+		return null == fileName?
+				this.getContentMetadataFile(inode):
+				new File(getRealAssetsRootPath()+File.separator+
+				inode.charAt(0)+File.separator+inode.charAt(1)+File.separator+inode+File.separator+
+				fileName);
+	}
 
     @Override
     public String getContentMetadataAsString(File metadataFile) throws Exception {
@@ -698,8 +811,7 @@ public class FileAssetAPIImpl implements FileAssetAPI {
         final String inode = fileAsset.getInode();
         if (UtilMethods.isSet(inode)) {
             final String realAssetPath = getRealAssetsRootPath();
-            java.io.File tumbnailDir = new java.io.File(realAssetPath + java.io.File.separator
-                    + "dotGenerated" + java.io.File.separator + inode.charAt(0)
+            java.io.File tumbnailDir = new java.io.File(ConfigUtils.getDotGeneratedPath() + java.io.File.separator + inode.charAt(0)
                     + java.io.File.separator + inode.charAt(1));
             if (tumbnailDir != null) {
                 java.io.File[] files = tumbnailDir.listFiles();
@@ -725,6 +837,7 @@ public class FileAssetAPIImpl implements FileAssetAPI {
         }
     }
 
+    @Override
 	public String getMimeType(String filename) {
 		if (filename != null) {
 			filename = filename.toLowerCase();
@@ -743,6 +856,12 @@ public class FileAssetAPIImpl implements FileAssetAPI {
 		}
 
 		return mimeType;
+	}
+
+	@Override
+	public String getMimeType(final File binary) {
+
+    	return MimeTypeUtils.getMimeType(binary);
 	}
 
 	public String getRealAssetPathTmpBinary() {

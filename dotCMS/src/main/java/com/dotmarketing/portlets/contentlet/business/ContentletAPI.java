@@ -1,5 +1,6 @@
 package com.dotmarketing.portlets.contentlet.business;
 
+import com.dotcms.business.CloseDBIfOpened;
 import com.dotcms.content.business.DotMappingException;
 import com.dotcms.content.elasticsearch.business.ESSearchResults;
 import com.dotcms.contenttype.model.type.ContentType;
@@ -17,7 +18,6 @@ import com.dotmarketing.exception.DotSecurityException;
 import com.dotmarketing.portlets.categories.model.Category;
 import com.dotmarketing.portlets.contentlet.model.Contentlet;
 import com.dotmarketing.portlets.contentlet.model.ContentletDependencies;
-import com.dotmarketing.portlets.contentlet.model.ContentletListener;
 import com.dotmarketing.portlets.folders.model.Folder;
 import com.dotmarketing.portlets.links.model.Link;
 import com.dotmarketing.portlets.structure.model.ContentletRelationships;
@@ -117,14 +117,25 @@ public interface ContentletAPI {
 	 */
 	public Contentlet findContentletByIdentifier(String identifier, boolean live, long languageId, User user, boolean respectFrontendRoles) throws DotDataException, DotSecurityException, DotContentletStateException;
 
-	/**
-	 * Retrieves a contentlet from the database by its identifier and the working version
+    /**
+     * Retrieves a contentlet from the database by its identifier and the working version.
+     * It includes archive content if includeDeleted is true
+     * @param identifier
+     * @param includeDeleted
+     * @return Contentlet object
+     * @throws DotSecurityException
+     * @throws DotDataException
+     */
+    Contentlet findContentletByIdentifierAnyLanguage(String identifier, boolean includeDeleted) throws DotDataException;
+
+    /**
+	 * Retrieves a contentlet from the database by its identifier and the working version. Ignores archived content
 	 * @param identifier
 	 * @return Contentlet object
 	 * @throws DotSecurityException
 	 * @throws DotDataException
 	 */
-	public Contentlet findContentletByIdentifierAnyLanguage(String identifier) throws DotDataException, DotSecurityException;
+	public Contentlet findContentletByIdentifierAnyLanguage(String identifier) throws DotDataException;
 
 	/**
 	 * Retrieves a contentlet list from the database based on a identifiers array
@@ -351,11 +362,11 @@ public interface ContentletAPI {
 	 * @throws DotStateException 
 	 */
 	public void publishRelatedHtmlPages(Contentlet contentlet) throws DotStateException, DotDataException;
-	
-	/**
+
+    /**
 	 * Will get all the contentlets for a structure and set the default values for a field on the contentlet.  
 	 * Will check Write/Edit permissions on the Contentlet. So to guarantee all Contentlets will be cleaned make
-	 * sure to pass in an Admin User.  If a user doesn't have permissions to clean all teh contentlets it will clean 
+	 * sure to pass in an Admin User.  If a user doesn't have permissions to clean all the contentlets it will clean
 	 * as many as it can and throw the DotSecurityException  
 	 * @param structure
 	 * @param field
@@ -365,6 +376,24 @@ public interface ContentletAPI {
 	 * @throws DotDataException
 	 */
 	public void cleanField(Structure structure, Field field, User user, boolean respectFrontendRoles) throws DotSecurityException, DotDataException;
+
+    /**
+     * Will get all the contentlets for a structure (whose modDate is lower than or equals to the deletion date)
+     * and set the default values for a field on the contentlet.
+     * Will check Write/Edit permissions on the Contentlet. So to guarantee all Contentlets will be cleaned make
+     * sure to pass in an Admin User.  If a user doesn't have permissions to clean all teh contentlets it will clean
+     * as many as it can and throw the DotSecurityException
+     * @param structure
+     * @param deletionDate
+     * @param field
+     * @param user
+     * @param respectFrontendRoles
+     * @throws DotSecurityException
+     * @throws DotDataException
+     */
+    void cleanField(final Structure structure, final Date deletionDate, final Field field, final User user,
+            final boolean respectFrontendRoles)
+            throws DotSecurityException, DotDataException;
 
 	/**
 	 * Will get all the contentlets for a structure and set the system host and system folder for the host values
@@ -509,29 +538,6 @@ public interface ContentletAPI {
 	public void archive(Contentlet contentlet, User user, boolean respectFrontendRoles) throws DotDataException,DotSecurityException, DotContentletStateException;
 
 	/**
-	 * This method completely deletes the given contentlet from the system
-	 * @param contentlet
-	 * @param user
-	 * @param respectFrontendRoles
-	 * @return true when no errors occurs otherwise false
-	 * @throws DotDataException
-	 * @throws DotSecurityException
-	 */
-	public boolean delete(Contentlet contentlet, User user, boolean respectFrontendRoles) throws DotDataException,DotSecurityException, DotContentletStateException;
-
-	/**
-	 * This method completely deletes the given contentlet from the system. It was added for the jira issue
-	 * http://jira.dotmarketing.net/browse/DOTCMS-2059
-	 * @param contentlet
-	 * @param user
-	 * @param respectFrontendRoles
-	 * @param allVersions
-	 * @throws DotDataException
-	 * @throws DotSecurityException
-	 */
-	public boolean delete(Contentlet contentlet, User user, boolean respectFrontendRoles, boolean allVersions) throws DotDataException,DotSecurityException, DotContentletStateException;
-
-	/**
 	 * Destroys the specified {@link Contentlet}. This method will automatically
 	 * un-publish, archive, and delete ALL the information related to this
 	 * contentlet in all of its languages.
@@ -666,6 +672,29 @@ public interface ContentletAPI {
 	public void deleteAllVersionsandBackup(List<Contentlet> contentlets, User user, boolean respectFrontendRoles) throws DotDataException,DotSecurityException, DotContentletStateException;
 
 	/**
+	 * This method completely deletes the given contentlet from the system
+	 * @param contentlet
+	 * @param user
+	 * @param respectFrontendRoles
+	 * @return true when no errors occurs otherwise false
+	 * @throws DotDataException
+	 * @throws DotSecurityException
+	 */
+	public boolean delete(Contentlet contentlet, User user, boolean respectFrontendRoles) throws DotDataException,DotSecurityException, DotContentletStateException;
+
+	/**
+	 * This method completely deletes the given contentlet from the system. It was added for the jira issue
+	 * http://jira.dotmarketing.net/browse/DOTCMS-2059
+	 * @param contentlet
+	 * @param user
+	 * @param respectFrontendRoles
+	 * @param allVersions
+	 * @throws DotDataException
+	 * @throws DotSecurityException
+	 */
+	public boolean delete(Contentlet contentlet, User user, boolean respectFrontendRoles, boolean allVersions) throws DotDataException,DotSecurityException, DotContentletStateException;
+
+	/**
 	 * Deletes the specified list of {@link Contentlet} objects ONLY in the
 	 * specified language. If any of the specified contentlets is not archived,
 	 * an exception will be thrown. If there's only one language for a given
@@ -679,7 +708,19 @@ public interface ContentletAPI {
 	 */
 	public boolean delete(List<Contentlet> contentlets, User user, boolean respectFrontendRoles) throws DotDataException,DotSecurityException, DotContentletStateException;
 
-    /**
+	/**
+	 * This method completely deletes the given contentlet from the system. It was added for the jira issue
+	 * http://jira.dotmarketing.net/browse/DOTCMS-2059
+	 * @param contentlets
+	 * @param user
+	 * @param respectFrontendRoles
+	 * @param allVersions
+	 * @throws DotDataException
+	 * @throws DotSecurityException
+	 */
+	public void delete(List<Contentlet> contentlets, User user, boolean respectFrontendRoles, boolean allVersions) throws DotDataException,DotSecurityException, DotContentletStateException;
+
+	/**
      * This method completely deletes all contentlets from the system for a the
      * given host.
      * <p>
@@ -696,18 +737,7 @@ public interface ContentletAPI {
      */
     public boolean deleteByHost(Host host, User user, boolean respectFrontendRoles) throws DotDataException, DotSecurityException;
 
-	/**
-	 * This method completely deletes the given contentlet from the system. It was added for the jira issue
-	 * http://jira.dotmarketing.net/browse/DOTCMS-2059
-	 * @param contentlets
-	 * @param user
-	 * @param respectFrontendRoles
-	 * @param allVersions
-	 * @throws DotDataException
-	 * @throws DotSecurityException
-	 */
-	public void delete(List<Contentlet> contentlets, User user, boolean respectFrontendRoles, boolean allVersions) throws DotDataException,DotSecurityException, DotContentletStateException;
-	
+
 	/**
 	 * Deletes all related content from passed in contentlet and relationship 
 	 * @param contentlet
@@ -748,6 +778,15 @@ public interface ContentletAPI {
             throws DotDataException, DotSecurityException, DotContentletStateException;
 
     /**
+     *
+     * @param contentlet
+     * @param relationship
+     * @param hasParent
+     */
+    void invalidateRelatedContentCache(Contentlet contentlet, Relationship relationship,
+            boolean hasParent);
+
+    /**
      * Returns a list of all contentlets related to this instance given a RelationshipField variable
      * using pagination
      * @param variableName
@@ -762,6 +801,27 @@ public interface ContentletAPI {
     List<Contentlet> getRelatedContent(Contentlet contentlet, String variableName, User user,
             boolean respectFrontendRoles, Boolean pullByParents, int limit, int offset,
             String sortBy);
+
+
+    /**
+     * Returns a list of all contentlets related to this instance given a RelationshipField variable
+     * using pagination
+     * @param contentlet
+     * @param variableName
+     * @param user
+     * @param respectFrontendRoles
+     * @param pullByParents
+     * @param limit
+     * @param offset
+     * @param sortBy
+     * @param language
+     * @param live
+     * @return
+     */
+    List<Contentlet> getRelatedContent(Contentlet contentlet, String variableName,
+            User user,
+            boolean respectFrontendRoles, Boolean pullByParents, int limit,
+            int offset, String sortBy, long language, Boolean live);
 
     /**
 	 * Associates the given list of contentlets using the relationship this
@@ -794,8 +854,7 @@ public interface ContentletAPI {
 
 
     /**
-     * Internally called by getRelatedContent methods (handles all the logic to filter by parents or children)
-     * @param contentlet
+     * @deprecated This method should not be exposed. Use ContentletAPI.getRelated variations instead     * @param contentlet
      * @param rel
      * @param user
      * @param respectFrontendRoles
@@ -807,6 +866,7 @@ public interface ContentletAPI {
      * @throws DotDataException
      * @throws DotSecurityException
      */
+    @Deprecated
     List<Contentlet> filterRelatedContent(Contentlet contentlet, Relationship rel,
             User user, boolean respectFrontendRoles, Boolean pullByParent, int limit, int offset,
             String sortBy)
@@ -850,6 +910,60 @@ public interface ContentletAPI {
             Boolean pullByParent, User user, boolean respectFrontendRoles, int limit, int offset,
             String sortBy)
             throws DotDataException;
+
+    /**
+     * Gets all related content from the same structure (where the parent and child structures are the same type)
+     * the parameter pullByParent if set to true tells the method to pull all children where the passed
+     * contentlet is the parent, if set to false then the passed contentlet is the child and you want to pull
+     * parents
+     *
+     * If this method is invoked using different structures kind of relationships then the parameter
+     * pullByParent will be ignored, and the side of the relationship will be figured out automatically
+     *
+     * This method uses pagination if necessary (limit, offset, sortBy)
+     * @param contentlet
+     * @param rel
+     * @param pullByParent
+     * @param user
+     * @param respectFrontendRoles
+     * @param limit
+     * @param offset
+     * @param sortBy
+     * @param language
+     * @param live
+     * @return
+     * @throws DotDataException
+     */
+    List<Contentlet> getRelatedContent(Contentlet contentlet, Relationship rel,
+            Boolean pullByParent, User user, boolean respectFrontendRoles, int limit, int offset,
+            String sortBy, long language, Boolean live)
+            throws DotDataException;
+
+    /**
+     * Gets all related content from the same structure (where the parent and child structures are the same type)
+     * the parameter pullByParent if set to true tells the method to pull all children where the passed
+     * contentlet is the parent, if set to false then the passed contentlet is the child and you want to pull
+     * parents
+     *
+     * If this method is invoked using different structures kind of relationships then the parameter
+     * pullByParent will be ignored, and the side of the relationship will be figured out automatically
+     *
+     * This method uses pagination if necessary (limit, offset, sortBy)
+     * @param contentlet
+     * @param rel
+     * @param pullByParent
+     * @param user
+     * @param respectFrontendRoles
+     * @param language
+     * @param live
+     * @return
+     * @throws DotDataException
+     * @throws DotSecurityException
+     */
+    List<Contentlet> getRelatedContent(Contentlet contentlet, Relationship rel,
+            Boolean pullByParent, User user, boolean respectFrontendRoles, long language,
+            Boolean live)
+            throws DotDataException, DotSecurityException;
 
     /**
 	 * Gets all related content from the same structure (where the parent and child structures are the same type)
@@ -998,8 +1112,14 @@ public interface ContentletAPI {
 	 * @throws DotContentletStateException if contentlet is not already persisted
 	 */
 	public Contentlet checkout(String contentletInode, User user, boolean respectFrontendRoles) throws DotDataException, DotSecurityException, DotContentletStateException;
-	
-	/**
+
+    @CloseDBIfOpened
+    Contentlet checkinWithoutVersioning(Contentlet contentlet,
+            ContentletRelationships contentRelationships, List<Category> cats,
+            List<Permission> permissions, User user,
+            boolean respectFrontendRoles) throws DotDataException,DotSecurityException, DotContentletStateException, DotContentletValidationException;
+
+    /**
 	 * Allows you to checkout contents so it can be altered and checked in.
 	 * Note that this method is only intended for use with Checkin methods.
 	 * Methods like publish, archive, unpublish,.. will fail when passing
@@ -1046,8 +1166,10 @@ public interface ContentletAPI {
 	 */
 	public List<Contentlet> checkout(String luceneQuery, User user, boolean respectFrontendRoles, int offset, int limit) throws DotDataException, DotSecurityException, DotContentletStateException;
 	
-	/** 
-	 * Will check in a new version of you contentlet. The inode of your contentlet must be null or empty.
+	/**
+     * @deprecated This method should not be used because it does not consider self related content.
+     * Use {@link ContentletAPI#checkin(Contentlet, ContentletRelationships, List, List, User, boolean)} instead
+     * Will check in a new version of you contentlet. The inode of your contentlet must be null or empty.
 	 * Note that the contentlet argument must be obtained using checkout methods.
      *
      * Important note to be considered: Related content can also be set using any of these methods:
@@ -1238,7 +1360,9 @@ public interface ContentletAPI {
 	public Contentlet checkin(Contentlet contentlet, User user, boolean respectFrontendRoles, List<Category> cats) throws IllegalArgumentException,DotDataException,DotSecurityException, DotContentletStateException, DotContentletValidationException;
 	
 	/**
-	 * Will check in a new version of you contentlet. The inode of your contentlet must be null or empty.
+	 * @deprecated This method should not be used because it does not consider self related content.
+     * Use {@link ContentletAPI#checkin(Contentlet, ContentletRelationships, List, List, User, boolean)} instead
+     * Will check in a new version of you contentlet. The inode of your contentlet must be null or empty.
 	 * Note that the contentlet argument must be obtained using checkout methods.
      *
      * Important note to be considered: Related content can also be set using any of these methods:
@@ -1289,7 +1413,9 @@ public interface ContentletAPI {
 	public Contentlet checkin(Contentlet contentlet, User user,boolean respectFrontendRoles) throws IllegalArgumentException,DotDataException,DotSecurityException, DotContentletStateException, DotContentletValidationException;
 
 	/**
-	 * Will check in a new version of you contentlet. The inode of your contentlet must be null or empty.
+	 * @deprecated This method should not be used because it does not consider self related content.
+     * Use {@link ContentletAPI#checkin(Contentlet, ContentletRelationships, List, List, User, boolean)} instead
+     * Will check in a new version of you contentlet. The inode of your contentlet must be null or empty.
 	 * Note that the contentlet argument must be obtained using checkout methods.
      *
      * Important note to be considered: Related content can also be set using any of these methods:
@@ -1324,7 +1450,9 @@ public interface ContentletAPI {
 	public Contentlet checkin(Contentlet contentlet, Map<Relationship, List<Contentlet>> contentRelationships, User user,boolean respectFrontendRoles) throws IllegalArgumentException,DotDataException,DotSecurityException, DotContentletStateException, DotContentletValidationException;
 	
 	/**
-	 * Will check in a update of your contentlet without generating a new version. The inode of your contentlet must be different from null/empty.
+	 * @deprecated This method should not be used because it does not consider self related content.
+     * Use {@link ContentletAPI#checkinWithoutVersioning(Contentlet, ContentletRelationships, List, List, User, boolean)} instead
+     * Will check in a update of your contentlet without generating a new version. The inode of your contentlet must be different from null/empty.
 	 * Note this method will also attempt to publish the contentlet and related assets (when checking in) without altering the mod date or mod user.
 	 * Note that the contentlet argument must be obtained using checkout methods.
      *
@@ -1980,5 +2108,12 @@ public interface ContentletAPI {
      * @return
      */
     Optional<Contentlet> findInDb(String inode);
+
+    /**
+     * refresh index by content type
+     * @param type
+     * @throws DotReindexStateException
+     */
+    void refresh(ContentType type) throws DotReindexStateException;
 
 }

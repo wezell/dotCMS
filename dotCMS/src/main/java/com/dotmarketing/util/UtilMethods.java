@@ -2,6 +2,7 @@ package com.dotmarketing.util;
 
 
 import com.dotcms.repackage.com.csvreader.CsvReader;
+import com.dotcms.repackage.org.apache.struts.Globals;
 import com.dotmarketing.beans.Host;
 import com.dotmarketing.beans.Identifier;
 import com.dotmarketing.beans.Inode;
@@ -52,9 +53,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Optional;
 import java.util.Random;
 import java.util.StringTokenizer;
 import java.util.TimeZone;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -64,7 +67,6 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
 import org.apache.commons.beanutils.PropertyUtils;
-import org.apache.struts.Globals;
 import org.apache.velocity.Template;
 import org.apache.velocity.VelocityContext;
 import org.apache.velocity.app.VelocityEngine;
@@ -311,6 +313,46 @@ public class UtilMethods {
 
     }
 
+
+    public static boolean isNotSet(final char[] chars){
+       return !isSet(chars);
+    }
+
+    /**
+     * if you're telling your self what a dumb thing this is.. We could have used Strings instead.
+     * Well that's precisely what we intent to avoid.
+     * Strings are immutable and even if you null em their reference could stick around long enough to reveal their value in case of a Thread-dump attack.
+     * That makes char array the data type of choice to handle secrets.
+     * @param chars
+     * @return
+     */
+    public static boolean isSet(final char[] chars){
+       if(null == chars){
+          return false;
+       }
+        final boolean isNull = chars.length == 4 &&
+                Character.toLowerCase(chars[0]) == 'n' &&
+                Character.toLowerCase(chars[1]) == 'u' &&
+                Character.toLowerCase(chars[2]) == 'l' &&
+                Character.toLowerCase(chars[3]) == 'l';
+       if(isNull){
+           return false;
+       }
+       return (chars.length > 0);
+    }
+
+    /**
+     * If argument instance is set, returns it otherwise will invoke the supplier to get the default value
+     * @param instance
+     * @param supplier
+     * @param <T>
+     * @return T
+     */
+    public static <T> T get(final T instance, final Supplier<T> supplier) {
+
+        return isSet(instance)? instance : supplier.get();
+    }
+
     public static final boolean isSet(java.util.Date x) {
         return ((x != null) && (x.getTime() > 0));
     }
@@ -401,26 +443,7 @@ public class UtilMethods {
         return isValidEmail((String) email);
     }
 
-    /**
-     * Description of the Method
-     *
-     * @param cmdline
-     *            Description of the Parameter
-     * @return Description of the Return Value
-     *
-     * public static final String CmdExec(String cmdline) { StringBuffer sb =
-     * new StringBuffer();
-     *
-     * try { String line; Process p = Runtime.getRuntime().exec(cmdline);
-     * BufferedReader input = new BufferedReader(new InputStreamReader(p
-     * .getInputStream()));
-     *
-     * while ((line = input.readLine()) != null) { sb.append(line); }
-     *
-     * input.close(); } catch (Exception err) { sb.append(err); }
-     *
-     * return sb.toString(); }
-     */
+
     public static final String dateToDayViewDate(java.util.Date x) {
         if (x == null) {
             return "";
@@ -1732,9 +1755,9 @@ public class UtilMethods {
     public static boolean isUrlLive(String url, String hostId) throws Exception {
       
       Identifier id = APILocator.getIdentifierAPI().find(APILocator.getHostAPI().find(hostId, APILocator.systemUser(), true), url);
-      ContentletVersionInfo cinfo = APILocator.getVersionableAPI().getContentletVersionInfo( id.getId(), APILocator.getLanguageAPI().getDefaultLanguage().getId() );
+      Optional<ContentletVersionInfo> cinfo = APILocator.getVersionableAPI().getContentletVersionInfo( id.getId(), APILocator.getLanguageAPI().getDefaultLanguage().getId() );
 
-      return (cinfo !=null && cinfo.getLiveInode() !=null);
+      return (cinfo.isPresent() && cinfo.get().getLiveInode() !=null);
     }
 
     public static boolean isUrlPreview(String url, Host host) throws Exception {
@@ -1743,9 +1766,8 @@ public class UtilMethods {
 
     public static boolean isUrlPreview(String url, String hostId) throws Exception {
       Identifier id = APILocator.getIdentifierAPI().find(APILocator.getHostAPI().find(hostId, APILocator.systemUser(), true), url);
-      ContentletVersionInfo cinfo = APILocator.getVersionableAPI().getContentletVersionInfo( id.getId(), APILocator.getLanguageAPI().getDefaultLanguage().getId() );
-
-      return (cinfo !=null && cinfo.getWorkingInode() !=null);
+      Optional<ContentletVersionInfo> cinfo = APILocator.getVersionableAPI().getContentletVersionInfo( id.getId(), APILocator.getLanguageAPI().getDefaultLanguage().getId() );
+      return (cinfo.isPresent() && cinfo.get().getWorkingInode() !=null);
     }
 
     public static String stripUnicode(String x) {
@@ -1776,8 +1798,8 @@ public class UtilMethods {
     /**
      * Special split function, to split csv files exported from access
      *
-     * @param reader
-     *            The file reader
+     * @param text
+     *
      * @param delim
      *            The columns delimiter
      * @param textQualifier
@@ -1848,7 +1870,7 @@ public class UtilMethods {
      */
     public static String getCharsetConfiguration() {
     	// CHARSET key in properties file specifies both content tableName and charset
-    	String charsetWithContentType = Config.getStringProperty("CHARSET");
+    	String charsetWithContentType = Config.getStringProperty("CHARSET", "UTF-8");
 
     	if (isSet(charsetWithContentType)) {
     		// We are only interested in charset
@@ -2465,7 +2487,6 @@ public class UtilMethods {
     /**
      * Return is a date is equals or before the actual date
      *
-     * @param date
      * @return
      */
     public static Date getCurrentDate() {

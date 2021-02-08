@@ -6,6 +6,8 @@ import com.dotcms.notifications.bean.NotificationType;
 import com.dotcms.repackage.javax.portlet.ActionRequest;
 import com.dotcms.repackage.javax.portlet.ActionResponse;
 import com.dotcms.repackage.javax.portlet.PortletConfig;
+import com.dotcms.repackage.org.apache.struts.action.ActionForm;
+import com.dotcms.repackage.org.apache.struts.action.ActionMapping;
 import com.dotcms.util.I18NMessage;
 import com.dotcms.uuid.shorty.ShortType;
 import com.dotcms.uuid.shorty.ShortyId;
@@ -31,6 +33,7 @@ import com.dotmarketing.portlets.folders.model.Folder;
 import com.dotmarketing.portlets.htmlpageasset.model.HTMLPageAsset;
 import com.dotmarketing.portlets.htmlpageasset.model.IHTMLPage;
 import com.dotmarketing.portlets.links.model.Link;
+import com.dotmarketing.portlets.structure.model.ContentletRelationships;
 import com.dotmarketing.util.DateUtil;
 import com.dotmarketing.util.InodeUtils;
 import com.dotmarketing.util.Logger;
@@ -45,9 +48,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
-
-import org.apache.struts.action.ActionForm;
-import org.apache.struts.action.ActionMapping;
 
 import com.liferay.portal.language.LanguageUtil;
 import com.liferay.portal.model.User;
@@ -306,7 +306,8 @@ public class OrderMenuAction extends DotPortletAction {
                             contentlet.setBoolProperty(Contentlet.DISABLE_WORKFLOW, true);
                             contentlet.setSortOrder(i);
                             contentlet.setModDate(new Date());
-                            final Contentlet in = APILocator.getContentletAPI().checkinWithoutVersioning(contentlet, null, null, null,
+                            final Contentlet in = APILocator.getContentletAPI().checkinWithoutVersioning(contentlet,
+                                    (ContentletRelationships) null, null, null,
                                     APILocator.systemUser(), false);
 
                             ret.add(in);

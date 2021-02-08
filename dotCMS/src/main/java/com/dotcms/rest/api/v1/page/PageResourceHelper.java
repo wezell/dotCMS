@@ -2,6 +2,11 @@ package com.dotcms.rest.api.v1.page;
 
 import com.dotcms.api.web.HttpServletRequestThreadLocal;
 import com.dotcms.business.WrapInTransaction;
+import com.dotcms.mock.request.CachedParameterDecorator;
+import com.dotcms.mock.request.HttpServletRequestParameterDecoratorWrapper;
+import com.dotcms.mock.request.LanguageIdParameterDecorator;
+import com.dotcms.mock.request.ParameterDecorator;
+import com.dotcms.rendering.velocity.directive.ParseContainer;
 import com.dotcms.rest.exception.BadRequestException;
 import com.dotcms.util.CollectionsUtils;
 import com.dotmarketing.beans.Host;
@@ -17,6 +22,7 @@ import com.dotmarketing.exception.DotRuntimeException;
 import com.dotmarketing.exception.DotSecurityException;
 import com.dotmarketing.factories.MultiTreeAPI;
 import com.dotmarketing.factories.PersonalizedContentlet;
+import com.dotmarketing.portlets.containers.business.FileAssetContainerUtil;
 import com.dotmarketing.portlets.containers.model.Container;
 import com.dotmarketing.portlets.containers.model.FileAssetContainer;
 import com.dotmarketing.portlets.contentlet.business.ContentletAPI;
@@ -35,9 +41,11 @@ import com.dotmarketing.portlets.templates.design.bean.ContainerUUID;
 import com.dotmarketing.portlets.templates.model.Template;
 import com.dotmarketing.util.PageMode;
 import com.dotmarketing.util.UtilMethods;
+import com.dotmarketing.util.WebKeys;
 import com.google.common.collect.Table;
 import com.liferay.portal.PortalException;
 import com.liferay.portal.SystemException;
+import com.liferay.portal.language.LanguageUtil;
 import com.liferay.portal.model.User;
 import java.io.IOException;
 import java.io.Serializable;
@@ -77,36 +85,54 @@ public class PageResourceHelper implements Serializable {
 
     }
 
+    private final static ParameterDecorator LANGUAGE_PARAMETER_DECORATOR = new LanguageIdParameterDecorator();
+
+
+    public HttpServletRequest decorateRequest(final HttpServletRequest request) {
+
+        final HttpServletRequest wrapRequest = new HttpServletRequestParameterDecoratorWrapper(request,
+                new CachedParameterDecorator(LANGUAGE_PARAMETER_DECORATOR));
+        HttpServletRequestThreadLocal.INSTANCE.setRequest(wrapRequest);
+        return wrapRequest;
+    }
+
+
     @WrapInTransaction
-    public void saveContent(final String pageId, final List<PageContainerForm.ContainerEntry> containerEntries) throws DotDataException {
+    public void saveContent(final String pageId,
+                            final List<PageContainerForm.ContainerEntry> containerEntries,
+                            final Language language) throws DotDataException {
 
         final Map<String, List<MultiTree>> multiTreesMap = new HashMap<>();
         for (final PageContainerForm.ContainerEntry containerEntry : containerEntries) {
             int i = 0;
             final  List<String> contentIds = containerEntry.getContentIds();
+            final String personalization = UtilMethods.isSet(containerEntry.getPersonaTag()) ?
+                    Persona.DOT_PERSONA_PREFIX_SCHEME + StringPool.COLON + containerEntry.getPersonaTag() :
+                    MultiTree.DOT_PERSONALIZATION_DEFAULT;
 
-            for (final String contentletId : contentIds) {
-                final MultiTree multiTree = new MultiTree().setContainer(containerEntry.getContainerId())
-                        .setContentlet(contentletId)
-                        .setInstanceId(containerEntry.getContainerUUID())
-                        .setTreeOrder(i++)
-                        .setHtmlPage(pageId);
+            if (UtilMethods.isSet(contentIds)) {
+                for (final String contentletId : contentIds) {
+                    final MultiTree multiTree = new MultiTree().setContainer(containerEntry.getContainerId())
+                            .setContentlet(contentletId)
+                            .setInstanceId(containerEntry.getContainerUUID())
+                            .setTreeOrder(i++)
+                            .setHtmlPage(pageId);
 
-                final String personalization = UtilMethods.isSet(containerEntry.getPersonaTag())?
-                        Persona.DOT_PERSONA_PREFIX_SCHEME + StringPool.COLON + containerEntry.getPersonaTag():
-                        MultiTree.DOT_PERSONALIZATION_DEFAULT;
+                    CollectionsUtils.computeSubValueIfAbsent(
+                            multiTreesMap, personalization, MultiTree.personalized(multiTree, personalization),
+                            CollectionsUtils::add,
+                            (String key, MultiTree multitree) -> CollectionsUtils.list(multitree));
+                }
+            } else {
 
-                CollectionsUtils.computeSubValueIfAbsent(
-                        multiTreesMap, personalization, MultiTree.personalized(multiTree, personalization),
-                        CollectionsUtils::add,
-                        (String key, MultiTree multitree)-> CollectionsUtils.list(multitree));
+                multiTreesMap.computeIfAbsent(personalization, key -> new ArrayList<>());
             }
         }
 
         for (final String personalization : multiTreesMap.keySet()) {
 
             multiTreeAPI.overridesMultitreesByPersonalization(pageId, personalization,
-                    multiTreesMap.get(personalization));
+                    multiTreesMap.get(personalization), Optional.ofNullable(language.getId()));
         }
     }
 
@@ -260,7 +286,9 @@ public class PageResourceHelper implements Serializable {
         final Container foundContainer = APILocator.getContainerAPI()
                 .getWorkingContainerById(containerId, userAPI.getSystemUser(), false);
         if (foundContainer instanceof FileAssetContainer) {
-            containerPath = FileAssetContainer.class.cast(foundContainer).getPath();
+            containerPath = FileAssetContainerUtil.getInstance().getFullPath(
+                    FileAssetContainer.class.cast(foundContainer)
+            );
         }
 
         if (ContainerUUID.UUID_DEFAULT_VALUE.equals(uniqueId)) {
@@ -270,6 +298,8 @@ public class PageResourceHelper implements Serializable {
             }
             return newlyContainerUUID != null ? newlyContainerUUID
                     : ContainerUUID.UUID_DEFAULT_VALUE;
+        } if (ParseContainer.isParserContainerUUID(uniqueId)) {
+            return uniqueId;
         } else {
             ContainerUUIDChanged change = pageForm.getChange(containerId, uniqueId);
             if (change == null && containerPath != null) {//Searching also by path if nothing found

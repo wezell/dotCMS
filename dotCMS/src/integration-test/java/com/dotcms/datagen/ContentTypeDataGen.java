@@ -6,8 +6,12 @@ import com.dotcms.contenttype.model.field.Field;
 import com.dotcms.contenttype.model.type.BaseContentType;
 import com.dotcms.contenttype.model.type.ContentType;
 import com.dotcms.contenttype.model.type.ContentTypeBuilder;
+import com.dotcms.languagevariable.business.LanguageVariableAPI;
 import com.dotmarketing.beans.Host;
 import com.dotmarketing.business.APILocator;
+import com.dotmarketing.exception.DotDataException;
+import com.dotmarketing.exception.DotRuntimeException;
+import com.dotmarketing.exception.DotSecurityException;
 import com.dotmarketing.portlets.categories.model.Category;
 import com.dotmarketing.portlets.folders.model.Folder;
 import com.dotmarketing.util.Logger;
@@ -32,6 +36,8 @@ public class ContentTypeDataGen extends AbstractDataGen<ContentType> {
     private Date iDateField = new Date();
     private String detailPage;
     private String urlMapPattern;
+    private String publishDateFieldVarName;
+    private String expireDateFieldVarName;
     private boolean systemField = Boolean.FALSE;
     private String velocityVarName = "testVarname" + currentTime;
     private List<Field> fields = new ArrayList<>();
@@ -89,6 +95,16 @@ public class ContentTypeDataGen extends AbstractDataGen<ContentType> {
     @SuppressWarnings("unused")
     public ContentTypeDataGen velocityVarName(final String velocityVarName) {
         this.velocityVarName = velocityVarName;
+        return this;
+    }
+
+    public ContentTypeDataGen publishDateFieldVarName(final String publishDateFieldVarName) {
+        this.publishDateFieldVarName = publishDateFieldVarName;
+        return this;
+    }
+
+    public ContentTypeDataGen expireDateFieldVarName(final String expireDateFieldVarName) {
+        this.expireDateFieldVarName = expireDateFieldVarName;
         return this;
     }
 
@@ -152,6 +168,8 @@ public class ContentTypeDataGen extends AbstractDataGen<ContentType> {
                 .owner(owner.getUserId())
                 .detailPage(detailPage)
                 .urlMapPattern(urlMapPattern)
+                .publishDateVar(publishDateFieldVarName)
+                .expireDateVar(expireDateFieldVarName)
                 .system(systemField)
                 .variable(velocityVarName)
                 .folder(folder.getInode())
@@ -160,6 +178,7 @@ public class ContentTypeDataGen extends AbstractDataGen<ContentType> {
                 .build();
     }
 
+    @WrapInTransaction
     @Override
     public ContentType persist(final ContentType contentType) {
         try {
@@ -179,6 +198,7 @@ public class ContentTypeDataGen extends AbstractDataGen<ContentType> {
      *
      * @return A new ContentType instance persisted in DB
      */
+    @WrapInTransaction
     @Override
     public ContentType nextPersisted() {
         return persist(next());
@@ -225,6 +245,7 @@ public class ContentTypeDataGen extends AbstractDataGen<ContentType> {
         remove(contentType, true);
     }
 
+    @WrapInTransaction
     public static void remove(final ContentType contentType, final Boolean failSilently) {
 
         if (null != contentType) {
@@ -237,6 +258,29 @@ public class ContentTypeDataGen extends AbstractDataGen<ContentType> {
                     throw new RuntimeException("Unable to remove ContentType.", e);
                 }
             }
+        }
+    }
+
+    @WrapInTransaction
+    public static ContentType createLanguageVariableContentType() {
+        final User systemUser = APILocator.systemUser();
+
+        try {
+            ContentType languageVariableContentType = APILocator.getContentTypeAPI(systemUser).find(LanguageVariableAPI.LANGUAGEVARIABLE);
+
+            if (languageVariableContentType == null) {
+                final ContentTypeDataGen contentTypeDataGen = new ContentTypeDataGen();
+
+                languageVariableContentType =  contentTypeDataGen.baseContentType(BaseContentType.KEY_VALUE)
+                        .name(LanguageVariableAPI.LANGUAGEVARIABLE)
+                        .nextPersisted();
+            }
+
+            PermissionUtilTest.addAnonymousUser(languageVariableContentType);
+
+            return languageVariableContentType;
+        } catch (DotSecurityException | DotDataException e) {
+            throw new DotRuntimeException(e);
         }
     }
 

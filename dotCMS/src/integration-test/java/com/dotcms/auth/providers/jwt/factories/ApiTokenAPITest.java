@@ -2,6 +2,7 @@ package com.dotcms.auth.providers.jwt.factories;
 
 import com.dotcms.auth.providers.jwt.beans.ApiToken;
 import com.dotcms.auth.providers.jwt.beans.JWToken;
+import com.dotcms.datagen.CompanyDataGen;
 import com.dotcms.datagen.UserDataGen;
 import com.dotcms.enterprise.cluster.ClusterFactory;
 import com.dotcms.repackage.org.apache.commons.net.util.SubnetUtils;
@@ -9,6 +10,10 @@ import com.dotcms.util.IntegrationTestInitService;
 import com.dotmarketing.business.APILocator;
 import com.dotmarketing.business.CacheLocator;
 import com.dotmarketing.business.DotStateException;
+import com.dotmarketing.util.DateUtil;
+import com.dotmarketing.util.UUIDGenerator;
+import com.liferay.portal.ejb.CompanyUtil;
+import com.liferay.portal.model.Company;
 import com.liferay.portal.model.User;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -218,6 +223,9 @@ public class ApiTokenAPITest {
         // revoking
         apiTokenAPI.revokeToken(fatToken, APILocator.systemUser());
 
+        // let's wait a bit so revoking time gets passed
+        DateUtil.sleep(1000);
+
         // should be invalid
         issuedFromDb = apiTokenAPI.findApiToken(fatToken.id).get();
         assert (!issuedFromDb.isValid());
@@ -271,6 +279,9 @@ public class ApiTokenAPITest {
         assertEquals(savedToken, skinnyToken);
 
         apiTokenAPI.revokeToken(savedToken, APILocator.systemUser());
+
+        // let's wait a bit so revoking time gets passed
+        DateUtil.sleep(1000);
 
         assertFalse("Optional will return empty b/c token is revoked", apiTokenAPI.fromJwt(jwt).isPresent());
 
@@ -350,7 +361,26 @@ public class ApiTokenAPITest {
     @Test
     public void test_user_must_be_active_to_validate_ApiToken() throws Exception {
 
-        User user = new UserDataGen().nextPersisted();
+        final Company company = new CompanyDataGen()
+                .name("TestCompany")
+                .shortName("TC")
+                .authType("email")
+                .autoLogin(true)
+                .emailAddress("lol2@dotCMS.com")
+                .homeURL("localhost")
+                .city("NYC")
+                .mx("MX")
+                .type("test")
+                .phone("5552368")
+                .portalURL("/portalURL")
+                .nextPersisted();
+        assertNotNull(company.getCompanyId());
+        final Company retrievedCompany =  CompanyUtil.findByPrimaryKey(company.getCompanyId());
+        assertEquals(company.getCompanyId(), retrievedCompany.getCompanyId());
+        User user = new UserDataGen().active(true)
+                .skinId(UUIDGenerator.generateUuid())
+                .companyId(retrievedCompany.getCompanyId())
+                .nextPersisted();
         assertTrue(user.isActive());
 
         ApiToken skinnyToken = ApiToken.from(getSkinnyToken()).withUserId(user.getUserId()).build();

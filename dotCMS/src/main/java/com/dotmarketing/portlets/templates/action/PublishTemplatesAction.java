@@ -3,6 +3,9 @@ package com.dotmarketing.portlets.templates.action;
 import com.dotcms.repackage.javax.portlet.ActionRequest;
 import com.dotcms.repackage.javax.portlet.ActionResponse;
 import com.dotcms.repackage.javax.portlet.PortletConfig;
+import com.dotcms.repackage.org.apache.struts.action.ActionForm;
+import com.dotcms.repackage.org.apache.struts.action.ActionMapping;
+import com.dotmarketing.business.APILocator;
 import com.dotmarketing.exception.WebAssetException;
 import com.dotmarketing.factories.InodeFactory;
 import com.dotmarketing.factories.PublishFactory;
@@ -16,8 +19,6 @@ import com.liferay.portal.model.User;
 import com.liferay.portlet.ActionRequestImpl;
 import com.liferay.util.servlet.SessionMessages;
 import java.net.URLDecoder;
-import org.apache.struts.action.ActionForm;
-import org.apache.struts.action.ActionMapping;
 
 /**
  * <a href="ViewQuestionsAction.java.html"><b><i>View Source</i></b></a>
@@ -29,8 +30,8 @@ import org.apache.struts.action.ActionMapping;
 public class PublishTemplatesAction extends DotPortletAction {
 
 	public void processAction(
-			 ActionMapping mapping, ActionForm form, PortletConfig config,
-			 ActionRequest req, ActionResponse res)
+			ActionMapping mapping, ActionForm form, PortletConfig config,
+			ActionRequest req, ActionResponse res)
 		 throws Exception {
 
         Logger.debug(this, "Running PublishTemplatesAction!!!!");
@@ -69,7 +70,7 @@ public class PublishTemplatesAction extends DotPortletAction {
 
 		for (int i=0;i<publishInode.length;i++) {
 
-			Template template = (Template) InodeFactory.getInode(publishInode[i],Template.class);
+			Template template = APILocator.getTemplateAPI().find(publishInode[i],user,false);
 			
 			if (InodeUtils.isSet(template.getInode())) {
 	        	

@@ -1,30 +1,12 @@
-<%@page import="com.dotcms.enterprise.LicenseUtil"%>
-<%@page import="com.dotcms.enterprise.license.LicenseLevel"%>
 <%@ page import="com.dotmarketing.util.Config" %>
 <%@page import="com.dotmarketing.business.APILocator"%>
-<%@page import="org.apache.struts.Globals"%>
+<%@page import="com.dotcms.repackage.org.apache.struts.Globals"%>
 <%@ page import="com.dotmarketing.util.PortletURLUtil" %>
+<%@page import="com.dotmarketing.portlets.contentlet.model.Contentlet"%>
 <%@ include file="/html/common/init.jsp" %>
 
+<% Contentlet contentlet =  (Contentlet) APILocator.getContentletAPI().findContentletByIdentifierAnyLanguage(request.getParameter("id"));  %>
 
-
-
-
-<%if( LicenseUtil.getLevel() < LicenseLevel.STANDARD.level){ %>
-	<div class="portlet-wrapper">
-		<div class="subNavCrumbTrail">
-			<ul id="subNavCrumbUl">
-				<li class="lastCrumb">
-					<a href="#" ><%=LanguageUtil.get(pageContext, "com.dotcms.repackage.javax.portlet.title.rules")%></a>
-				</li>
-
-			</ul>
-			<div class="clear"></div>
-		</div>
-		<jsp:include page="/WEB-INF/jsp/rules/not_licensed.jsp"></jsp:include>
-
-	</div>
-<%return;}%>
 
 	
 	<div id="rules-engine-container" class="portlet-wrapper">
@@ -47,10 +29,10 @@
   var siteParam="realmId=<%=request.getParameter("id")%>";
   var hideFireOnParam = "hideFireOn=true"; 
   var hideRulePushOptions = "hideRulePushOptions=<%=request.getParameter("hideRulePushOptions")%>";
-  
+  var isContentletHost = "isContentletHost=<%=contentlet.isHost()%>"
 	
   //Add param to the rules engine iframe.
-  document.getElementById("rulesIframe").src = "/<%=PortletURLUtil.URL_ADMIN_PREFIX%>/index.html#/fromCore/rules?" + localeParam + "&" + siteParam + "&" + hideFireOnParam+ "&" +hideRulePushOptions;
+  document.getElementById("rulesIframe").src = "/<%=PortletURLUtil.URL_ADMIN_PREFIX%>/index.html#/fromCore/rules?" + localeParam + "&" + siteParam + "&" + hideFireOnParam+ "&" +hideRulePushOptions + "&" + isContentletHost ;
   
   
 

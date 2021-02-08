@@ -30,6 +30,7 @@ import com.dotmarketing.util.Logger;
 import com.dotmarketing.util.UUIDGenerator;
 import com.dotmarketing.util.UtilMethods;
 import com.liferay.portal.model.User;
+import java.util.Map.Entry;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -220,13 +221,16 @@ public class CopyActionletTest extends BaseWorkflowIntegrationTest {
                     Logger.info(this,"No samples found skipping validation.");
                 }
             }
-            originalAndCopyMap.forEach(this::validateCopyVsOriginal);
+            for (Entry<Contentlet, Contentlet> entry : originalAndCopyMap.entrySet()) {
+                Contentlet key = entry.getKey();
+                Contentlet value = entry.getValue();
+                validateCopyVsOriginal(key, value);
+            }
 
         }finally {
              for(final Contentlet copy : originalAndCopyMap.values()){
                 try{
-                  contentletAPI.archive(copy, systemUser, false);
-                  contentletAPI.delete(copy, systemUser, false);
+                  contentletAPI.destroy(copy, systemUser, false);
                 }catch(Exception e){
                     Logger.error(this,"Error performing clean-up.", e);
                 }
@@ -235,7 +239,8 @@ public class CopyActionletTest extends BaseWorkflowIntegrationTest {
 
     }
 
-    private void validateCopyVsOriginal(final Contentlet original, final Contentlet copy) {
+    private void validateCopyVsOriginal(final Contentlet original, final Contentlet copy)
+            throws DotDataException {
 
         // printDebugInfo(original, copy);
 

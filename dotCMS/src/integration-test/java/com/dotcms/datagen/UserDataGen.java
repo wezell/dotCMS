@@ -1,10 +1,12 @@
 package com.dotcms.datagen;
 
+import com.dotcms.business.WrapInTransaction;
 import com.dotmarketing.business.APILocator;
 import com.dotmarketing.business.Role;
 import com.dotmarketing.exception.DotDataException;
 import com.dotmarketing.exception.DotSecurityException;
 import com.dotmarketing.util.Logger;
+import com.dotmarketing.util.UUIDGenerator;
 import com.dotmarketing.util.UUIDUtil;
 import com.liferay.portal.model.User;
 import java.util.ArrayList;
@@ -21,11 +23,24 @@ public class UserDataGen extends AbstractDataGen<User> {
     private String lastName = "testLastName" + currentTime;
     private String emailAddress = "testEmailAddress@" + currentTime + ".com";
     private String password = String.valueOf(currentTime);
+    private String skinIdentifier = UUIDGenerator.generateUuid();
+    private String companyId = com.dotmarketing.cms.factories.PublicCompanyFactory.getDefaultCompany().getCompanyId();
     private List<Role> roles = new ArrayList<>();
 
     @SuppressWarnings("unused")
     public UserDataGen id(final String id) {
         this.id = id;
+        return this;
+    }
+
+    public UserDataGen companyId(final String companyId) {
+        this.companyId = companyId;
+        return this;
+    }
+
+    @SuppressWarnings("unused")
+    public UserDataGen skinId(final String skinIdentifier) {
+        this.skinIdentifier = skinIdentifier;
         return this;
     }
 
@@ -74,11 +89,14 @@ public class UserDataGen extends AbstractDataGen<User> {
         user.setLastName(lastName);
         user.setEmailAddress(emailAddress);
         user.setPassword(password);
+        user.setSkinId(this.skinIdentifier);
+        user.setCompanyId(companyId);
 
         return user;
     }
 
     @Override
+    @WrapInTransaction
     public User persist(User user) {
 
         try {
@@ -88,6 +106,8 @@ public class UserDataGen extends AbstractDataGen<User> {
             newUser.setLastName(user.getLastName());
             newUser.setPassword(user.getPassword());
             newUser.setActive(user.getActive());
+            newUser.setSkinId(user.getSkinId());
+            newUser.setCompanyId(user.getCompanyId());
             APILocator.getUserAPI().save(newUser, APILocator.systemUser(), false);
 
             for(final Role role:roles){
@@ -106,15 +126,18 @@ public class UserDataGen extends AbstractDataGen<User> {
      *
      * @return A new User instance persisted in DB
      */
+    @WrapInTransaction
     @Override
     public User nextPersisted() {
         return persist(next());
     }
 
+    @WrapInTransaction
     public static void remove(final User user) {
         remove(user, true);
     }
 
+    @WrapInTransaction
     public static void remove(final User user, final Boolean failSilently) {
         try {
             APILocator.getUserAPI()

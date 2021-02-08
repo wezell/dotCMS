@@ -26,6 +26,9 @@ import com.dotcms.repackage.javax.portlet.PortletConfig;
 import com.dotcms.repackage.javax.portlet.RenderRequest;
 import com.dotcms.repackage.javax.portlet.RenderResponse;
 import com.dotcms.repackage.javax.portlet.WindowState;
+import com.dotcms.repackage.org.apache.struts.action.ActionForm;
+import com.dotcms.repackage.org.apache.struts.action.ActionForward;
+import com.dotcms.repackage.org.apache.struts.action.ActionMapping;
 import com.dotmarketing.quartz.QuartzUtils;
 import com.dotmarketing.util.Logger;
 import com.dotmarketing.util.WebKeys;
@@ -36,9 +39,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import javax.servlet.jsp.PageContext;
-import org.apache.struts.action.ActionForm;
-import org.apache.struts.action.ActionForward;
-import org.apache.struts.action.ActionMapping;
 
 /**
  * <a href="ViewQuestionsAction.java.html"><b><i>View Source</i></b></a>
@@ -61,14 +61,14 @@ public class ViewSchedulersAction extends PortletAction {
 			String group2 = "Recurrent Campaign";
 			Map<String,List<String>> results = new HashMap<String,List<String>>();
 			List<String> list = new ArrayList<String>();
-			String[] tasks =  QuartzUtils.getStandardScheduler().getJobNames(group);
+			String[] tasks =  QuartzUtils.getScheduler().getJobNames(group);
 			for(String task : tasks){
 				list.add(task);
 			}
 			results.put(group, list);
 			
 			List<String> list2 = new ArrayList<String>();
-			String[] tasks2 =  QuartzUtils.getStandardScheduler().getJobNames(group2);
+			String[] tasks2 =  QuartzUtils.getScheduler().getJobNames(group2);
 			for(String task : tasks2){
 				list2.add(task);
 			}

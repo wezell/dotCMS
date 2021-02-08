@@ -2,11 +2,11 @@ package com.dotcms.rendering.velocity.viewtools.content.util;
 
 import com.dotcms.content.elasticsearch.business.ESMappingAPIImpl;
 import com.dotcms.rendering.velocity.viewtools.content.PaginatedContentList;
-
-import com.dotcms.util.CollectionsUtils;
+import com.dotcms.util.TimeMachineUtil;
 import com.dotmarketing.beans.Identifier;
 import com.dotmarketing.business.APILocator;
 import com.dotmarketing.business.FactoryLocator;
+import com.dotmarketing.business.web.WebAPILocator;
 import com.dotmarketing.common.model.ContentletSearch;
 import com.dotmarketing.exception.DotDataException;
 import com.dotmarketing.exception.DotSecurityException;
@@ -16,20 +16,17 @@ import com.dotmarketing.portlets.contentlet.business.ContentletAPI;
 import com.dotmarketing.portlets.contentlet.model.Contentlet;
 import com.dotmarketing.portlets.structure.model.Relationship;
 import com.dotmarketing.util.Logger;
+import com.dotmarketing.util.PageMode;
 import com.dotmarketing.util.PaginatedArrayList;
 import com.dotmarketing.util.UtilMethods;
-
 import com.liferay.portal.model.User;
 
-import com.liferay.util.StringPool;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.Date;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 import java.util.stream.Collectors;
+import com.dotcms.api.web.HttpServletRequestThreadLocal;
+
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpSession;
 
 /**
  * The purpose of this class is to abstract the methods called from the ContentTool Viewtool
@@ -168,49 +165,66 @@ public class ContentUtils {
 		public static List<Contentlet> pull(String query,int limit, String sort, User user, String tmDate){
 		    return pull(query,-1,limit,sort, user, tmDate);
 		}
-		
-		public static PaginatedArrayList<Contentlet> pull(String query, int offset,int limit, String sort, User user, String tmDate){
-			return pull(query, offset, limit, sort, user, tmDate, false);
+
+		/**
+		 * Pull content using query if a Time Machine Date is set into session then it ios take account when the query is
+		 * ran.
+		 * 
+		 * @param query
+		 * @param offset
+		 * @param limit
+		 * @param sort
+		 * @param user
+		 * @param tmDate
+		 * @return
+		 */
+		public static PaginatedArrayList<Contentlet> pull(
+				final String query,
+				final int offset,
+				final int limit,
+				final String sort,
+				final User user,
+				final String tmDate){
+			return pull(query, offset, limit, sort, user, tmDate, PageMode.get().respectAnonPerms);
 		}
 
-		public static PaginatedArrayList<Contentlet> pull(String query, int offset,int limit, String sort, User user, String tmDate, boolean respectFrontendRoles){
-		    PaginatedArrayList<Contentlet> ret = new PaginatedArrayList<Contentlet>();
-		    
+		public static PaginatedArrayList<Contentlet> pull(final String query, final int offset, final int limit,
+														  final String sort, final User user, final boolean respectFrontendRoles) {
+			final String tmDate = TimeMachineUtil.getTimeMachineDate().orElse(null);
+			return pull(query, offset, limit, sort, user, tmDate, respectFrontendRoles);
+		}
+
+	public static PaginatedArrayList<Contentlet> pull(String query, final int offset, final int limit, final String sort, final User user, final String tmDate, final boolean respectFrontendRoles){
+		    final PaginatedArrayList<Contentlet> ret = new PaginatedArrayList<>();
+
 			try {
 				//need to send the query with the defaults --- 
 			    List<Contentlet> contentlets=null;
 			    if(tmDate!=null && query.contains("+live:true")) {
 			        // with timemachine on!
-		            String datestr=tmDate;
-		            Date futureDate=new Date(Long.parseLong(datestr));
-		            query=query.replaceAll("\\+live\\:true", "").replaceAll("\\+working\\:true", "");
-		            String ffdate=ESMappingAPIImpl.datetimeFormat.format(futureDate);
+                    final Date futureDate = new Date(Long.parseLong(tmDate));
+                    query = query.replaceAll("\\+live\\:true", "")
+                            .replaceAll("\\+working\\:true", "");
+                    final String formatedDate = ESMappingAPIImpl.datetimeFormat.format(futureDate);
+
+                    final String notExpired = " +expdate:[" + formatedDate + " TO 29990101000000] ";
+                    final String workingQuery = query + " +working:true " +
+                            "+pubdate:[" + ESMappingAPIImpl.datetimeFormat.format(new Date())
+                            +
+                            " TO " + formatedDate + "] " + notExpired;
+                    final String liveQuery = query + " +live:true " + notExpired;
 		            
-		            String notexpired=" +expdate:["+ffdate+" TO 29990101000000] ";
-		            String wquery=query + " +working:true " +
-		            		"+pubdate:["+ESMappingAPIImpl.datetimeFormat.format(new Date())+
-		            				" TO "+ffdate+"] "+notexpired;
-		            String lquery=query + " +live:true " + notexpired;
-		            
-		            PaginatedArrayList<Contentlet> wc=(PaginatedArrayList<Contentlet>)conAPI.search(wquery, limit, offset, sort, user, respectFrontendRoles);
-		            PaginatedArrayList<Contentlet> lc=(PaginatedArrayList<Contentlet>)conAPI.search(lquery, limit, offset, sort, user, respectFrontendRoles);
-		            ret.setQuery(lquery);
-		            // merging both results avoiding repeated inodes
-		            Set<String> inodes=new HashSet<String>();
-		            contentlets=new ArrayList<Contentlet>();
-		            ret.setTotalResults(
-		                    wc.getTotalResults()>lc.getTotalResults() ? 
-		                            wc.getTotalResults() : lc.getTotalResults());
-		            contentlets.addAll(wc);
-		            for(Contentlet cc : wc) 
-		                inodes.add(cc.getInode());
-		            for(Contentlet cc : lc) {
-		                if(!inodes.contains(cc.getInode())) {
-		                    contentlets.add(cc);
-		                    inodes.add(cc.getInode());
-		                }
-		            }
-		            
+		            final PaginatedArrayList<Contentlet> workingContent = (PaginatedArrayList<Contentlet>)conAPI.search(workingQuery, limit, offset, sort, user, respectFrontendRoles);
+                    final PaginatedArrayList<Contentlet> liveContent = (PaginatedArrayList<Contentlet>)conAPI.search(liveQuery, limit, offset, sort, user, respectFrontendRoles);
+		            ret.setQuery(liveQuery);
+
+					contentlets = new ArrayList<>(workingContent);
+					ret.setTotalResults(Math.max(workingContent.getTotalResults(), liveContent.getTotalResults()));
+
+					// merging both results avoiding repeated inodes
+					final Set<String> inodes = workingContent.stream().map(Contentlet::getInode).collect(Collectors.toSet());
+                    contentlets.addAll(liveContent.stream().filter(contentlet -> !inodes.contains(contentlet.getInode())).collect(Collectors.toList()));
+
 		            // sorting the result
 		            if(UtilMethods.isSet(sort) && !sort.trim().equals("random")) {
 	    	            final String[] sorts=sort.split(",");
@@ -236,8 +250,9 @@ public class ContentUtils {
 		            }
 		            
 		            // truncate to respect limit
-		            if(contentlets.size()>limit)
-		                contentlets=contentlets.subList(0, limit);
+		            if(contentlets.size()>limit){
+		                contentlets = contentlets.subList(0, limit);
+		            }
 			    }
 			    else {
 			        // normal query
@@ -246,8 +261,7 @@ public class ContentUtils {
 			        ret.setQuery(query);
 			        contentlets=conts;
 			    }
-				for(Contentlet c : contentlets)
-					ret.add(c);
+				ret.addAll(contentlets);
 			} 
 			catch (Throwable e) {
 				String msg = e.getMessage();
@@ -452,45 +466,80 @@ public class ContentUtils {
 		public static List<Contentlet> pullRelated(String relationshipName, String contentletIdentifier, boolean pullParents, int limit, String sort, User user, String tmDate) {
 			return pullRelated(relationshipName, contentletIdentifier, null, pullParents, limit, sort, user, tmDate);
 		}
-		
-		/**
-		 * Will return a ContentMap object which can be used on dotCMS front end. 
-		 * This method is better then the old #pullRelatedContent macro because it doesn't have to 
-		 * parse all the velocity content object that are returned.  If you are building large pulls
-		 * and depending on the types of fields on the content this can get expensive especially
-		 * with large data sets.<br />
-		 * EXAMPLE:<br />
-		 * #foreach($con in $dotcontent.pullRelated('myRelationship','asbd-asd-asda-asd','+myField:someValue',false,5,'modDate desc'))<br />
-		 * 		$con.title<br />
-		 * #end<br />
-		 * The method will figure out language, working and live for you if not passed in with the condition
-		 * Returns empty List if no results are found
-		 * @param relationshipName - Name of the relationship as defined in the structure.
-		 * @param contentletIdentifier - Identifier of the contentlet
-		 * @param condition - Extra conditions to add to the query. like +title:Some Title.  Can be Null
-		 * @param pullParents Should the related pull be based on Parents or Children
-		 * @param limit 0 is the dotCMS max limit which is 10000. Becareful when searching for unlimited amount as all content will load into memory
-		 * @param sort - Velocity variable name to sort by.  this is a string and can contain multiple values "sort1 acs, sort2 desc". Can be Null
-		 * @return Returns empty List if no results are found
-		 * @throws DotSecurityException 
-		 * @throws DotDataException 
-		 * @return Returns empty List if no results are found
-		 */
-		public static List<Contentlet> pullRelated(String relationshipName, String contentletIdentifier, String condition, boolean pullParents, int limit, String sort, User user, String tmDate) {
-			final Relationship relationship = FactoryLocator.getRelationshipFactory()
-					.byTypeValue(relationshipName);
 
-			return getPullResults(relationship, contentletIdentifier, condition, limit, -1, sort,
-					user, tmDate, pullParents);
-		}
+    /**
+     * Will return a ContentMap object which can be used on dotCMS front end. This method is better
+     * then the old #pullRelatedContent macro because it doesn't have to parse all the velocity
+     * content object that are returned.  If you are building large pulls and depending on the types
+     * of fields on the content this can get expensive especially with large data sets.<br />
+     * EXAMPLE:<br /> #foreach($con in $dotcontent.pullRelated('myRelationship','asbd-asd-asda-asd','+myField:someValue',false,5,'modDate
+     * desc'))<br /> $con.title<br /> #end<br /> The method will figure out language, working and
+     * live for you if not passed in with the condition Returns empty List if no results are found
+     *
+     * @param relationshipName - Name of the relationship as defined in the structure.
+     * @param contentletIdentifier - Identifier of the contentlet
+     * @param condition - Extra conditions to add to the query. like +title:Some Title.  Can be
+     * Null
+     * @param pullParents Should the related pull be based on Parents or Children
+     * @param limit 0 is the dotCMS max limit which is 10000. Becareful when searching for unlimited
+     * amount as all content will load into memory
+     * @param sort - Velocity variable name to sort by.  this is a string and can contain multiple
+     * values "sort1 acs, sort2 desc". Can be Null
+     * @param user
+     * @param tmDate Time Machine date
+     * @return Returns empty List if no results are found
+     */
+    public static List<Contentlet> pullRelated(String relationshipName, String contentletIdentifier,
+            String condition, boolean pullParents, int limit, String sort, User user,
+            String tmDate) {
+        final Relationship relationship = FactoryLocator.getRelationshipFactory()
+                .byTypeValue(relationshipName);
+
+        return getPullResults(relationship, contentletIdentifier, condition, limit, -1, sort,
+                user, tmDate, pullParents, -1, null);
+    }
+
+    /**
+     * Will return a ContentMap object which can be used on dotCMS front end. This method is better
+     * then the old #pullRelatedContent macro because it doesn't have to parse all the velocity
+     * content object that are returned.  If you are building large pulls and depending on the types
+     * of fields on the content this can get expensive especially with large data sets.<br />
+     * EXAMPLE:<br /> #foreach($con in $dotcontent.pullRelated('myRelationship','asbd-asd-asda-asd','+myField:someValue',false,5,'modDate
+     * desc'))<br /> $con.title<br /> #end<br /> The method will figure out language, working and
+     * live for you if not passed in with the condition Returns empty List if no results are found
+     *
+     * @param relationshipName - Name of the relationship as defined in the structure.
+     * @param contentletIdentifier - Identifier of the contentlet
+     * @param condition - Extra conditions to add to the query. like +title:Some Title.  Can be
+     * Null
+     * @param pullParents Should the related pull be based on Parents or Children
+     * @param limit 0 is the dotCMS max limit which is 10000. Becareful when searching for unlimited
+     * amount as all content will load into memory
+     * @param sort - Velocity variable name to sort by.  this is a string and can contain multiple
+     * values "sort1 acs, sort2 desc". Can be Null
+     * @param user
+     * @param tmDate - Time Machine date
+     * @param language - Language ID to be used to filter results
+     * @param live - Boolean to filter live/non-live content
+     * @return Returns empty List if no results are found
+     */
+    public static List<Contentlet> pullRelated(String relationshipName, String contentletIdentifier,
+            String condition, boolean pullParents, int limit, String sort, User user, String tmDate,
+            final long language, final Boolean live) {
+        final Relationship relationship = FactoryLocator.getRelationshipFactory()
+                .byTypeValue(relationshipName);
+
+        return getPullResults(relationship, contentletIdentifier, condition, limit, -1, sort,
+                user, tmDate, pullParents, language, live);
+    }
 
     /**
      * Logic used for `pullRelated` and `pullRelatedField` methods
      */
     private static List<Contentlet> getPullResults(final Relationship relationship,
             String contentletIdentifier, final String condition, final int limit, final int offset,
-            String sort, final User user,
-            final String tmDate, final boolean pullByParent) {
+            String sort, final User user, final String tmDate, final boolean pullParents,
+            final long language, final Boolean live) {
 
 
         final boolean selfRelated = APILocator.getRelationshipAPI().sameParentAndChild(relationship);
@@ -501,51 +550,73 @@ public class ContentUtils {
             final Contentlet contentlet = conAPI
                 .findContentletByIdentifierAnyLanguage(contentletIdentifier);
 
-            final StringBuilder pullQuery = new StringBuilder();
-
             if (UtilMethods.isSet(condition)){
 
-                if ((selfRelated && pullByParent) || (!selfRelated && relationship
+                final StringBuilder pullQuery = new StringBuilder();
+
+                if (language != -1){
+                    pullQuery.append(" ").append("+languageId:").append(language).append(" ");
+                }
+                if (!user.isBackendUser()){
+                    pullQuery.append("+live:true ");
+                } else if (live !=null){
+                    pullQuery.append("+live:").append(live).append(" ");
+                }
+
+                pullQuery.append(condition);
+
+                if ((selfRelated && !pullParents) || (!selfRelated && relationship
                         .getParentStructureInode().equals(contentlet.getContentTypeId()))) {
                     //pulling children
                     final List<Contentlet> relatedContent = conAPI
-                            .getRelatedContent(contentlet, relationship, pullByParent, user,
-                                    false);
+                            .getRelatedContent(contentlet, relationship, !pullParents, user,
+                                    true, -1, -1, sort, language, live);
 
                     if (relatedContent.isEmpty()) {
                         return Collections.emptyList();
                     }
 
-                    pullQuery.append("+identifier:(").append(String.join(" OR ", relatedContent
+                    pullQuery.append(" +identifier:(").append(String.join(" OR ", relatedContent
                             .stream().map(cont -> cont.getIdentifier()).collect(
                                     Collectors.toList()))).append(")");
 
-                    if (UtilMethods.isSet(condition)) {
-                        pullQuery.append(" AND ").append(condition);
-                    }
-                } else {
-                    //pulling parents
-                    pullQuery.append("+" + relationshipName + ":"
-                            + contentletIdentifier);
-                }
-                pullQuery.append(" ").append(condition);
-                return pull(pullQuery.toString(), offset, limit, sort, user, tmDate);
+                    final List<String> results = conAPI.searchIndex(pullQuery.toString(), limit,offset, sort, user, true)
+                                    .stream()
+                                    .map(cs-> cs.getIdentifier()).collect(Collectors.toList());
+                    
+                    return relatedContent.stream().filter(c->results.contains(c.getIdentifier())).collect(Collectors.toList());
+                } 
+                
+                //pulling parents
+                pullQuery.append(" +" + relationshipName + ":" + contentletIdentifier);
+                
+                return pull(pullQuery.toString(), offset, limit, sort, user, tmDate, true);
+
             } else {
                 return conAPI
-                        .getRelatedContent(contentlet, relationship, pullByParent, user, false);
+                        .getRelatedContent(contentlet, relationship, !pullParents, user, true, limit, offset, sort, language, live);
             }
 
         } catch (Exception e) {
-            Logger.error(ContentUtils.class,
-                    "Error pulling related content with identifier " + contentletIdentifier
-                            + ". Relationship Name: " + relationshipName, e);
+            // throw stack when admin
+            if(PageMode.get().isAdmin) {
+                Logger.warn(ContentUtils.class,
+                                "Error pullRelated identifier " + contentletIdentifier
+                                        + ". Relationship: " + relationshipName + " : " + e.getMessage(), e);
+            }
+            else {
+            Logger.warnAndDebug(ContentUtils.class,
+                    "Error pullRelated identifier " + contentletIdentifier
+                            + ". Relationship: " + relationshipName + " : " + e.getMessage(), e);
+            }
         }
 
         return Collections.emptyList();
     }
 
     /**
-	 * Returns a list of related content given a Relationship and additional filtering criteria
+	 * @deprecated This method does not work for self related content. Use another pullRelatedField implementation in {@link ContentUtils}
+     * Returns a list of related content given a Relationship and additional filtering criteria
 	 * @param relationship
 	 * @param contentletIdentifier - Identifier of the contentlet
 	 * @param condition - Extra conditions to add to the query. like +title:Some Title.  Can be Null
@@ -556,18 +627,83 @@ public class ContentUtils {
 	 * @param tmDate
 	 * @return Returns empty List if no results are found
 	 */
+    @Deprecated
 	public static List<Contentlet> pullRelatedField(final Relationship relationship,
 			final String contentletIdentifier, final String condition, final int limit,
 			final int offset, final String sort, final User user, final String tmDate) {
 		return getPullResults(relationship, contentletIdentifier, condition, limit, offset, sort,
-				user, tmDate, true);
+				user, tmDate, false, -1, null);
 	}
 
+    /**
+     * Returns a list of related content given a Relationship and additional filtering criteria
+     * @param relationship
+     * @param contentletIdentifier
+     * @param condition
+     * @param limit
+     * @param offset
+     * @param sort
+     * @param user
+     * @param tmDate
+     * @param language
+     * @param live
+     * @return
+     */
     public static List<Contentlet> pullRelatedField(final Relationship relationship,
             final String contentletIdentifier, final String condition, final int limit,
-            final int offset, final String sort, final User user, final String tmDate, final boolean pullByParent) {
+            final int offset, final String sort, final User user, final String tmDate, final boolean pullParents,
+            final long language, final Boolean live) {
         return getPullResults(relationship, contentletIdentifier, condition, limit, offset, sort,
-                user, tmDate, pullByParent);
+                user, tmDate, pullParents, language, live);
     }
+
+    /**
+     *
+     * @param relationship
+     * @param contentletIdentifier
+     * @param condition
+     * @param limit
+     * @param offset
+     * @param sort
+     * @param user
+     * @param tmDate
+     * @param pullParents
+     * @return
+     */
+    public static List<Contentlet> pullRelatedField(final Relationship relationship,
+            final String contentletIdentifier, final String condition, final int limit,
+            final int offset, final String sort, final User user, final String tmDate, final boolean pullParents) {
+        return getPullResults(relationship, contentletIdentifier, condition, limit, offset, sort,
+                user, tmDate, pullParents, -1, null);
+    }
+
+	public static String addDefaultsToQuery(String query, final boolean editOrPreviewMode, final
+			HttpServletRequest request){
+		String q = "";
+
+		if(query != null)
+			q = query;
+		else
+			query = q;
+
+		if(!query.contains("languageId")){
+			q += " +languageId:" + WebAPILocator.getLanguageWebAPI().getLanguage(request).getId();
+		}
+
+		if(!(query.contains("live:") || query.contains("working:") )){
+			if(editOrPreviewMode && !TimeMachineUtil.isRunning()){
+				q +=" +working:true ";
+			}else{
+				q +=" +live:true ";
+			}
+
+		}
+
+
+		if(!UtilMethods.contains(query,"deleted:")){
+			q+=" +deleted:false ";
+		}
+		return q;
+	}
 		
 }

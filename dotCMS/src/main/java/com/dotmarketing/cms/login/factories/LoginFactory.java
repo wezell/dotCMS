@@ -9,7 +9,6 @@ import com.dotcms.enterprise.de.qaware.heimdall.PasswordException;
 import com.dotmarketing.business.APILocator;
 import com.dotmarketing.business.DuplicateUserException;
 import com.dotmarketing.cms.factories.PublicEncryptionFactory;
-import com.dotmarketing.cms.login.struts.LoginForm;
 import com.dotmarketing.exception.DotDataException;
 import com.dotmarketing.exception.DotSecurityException;
 import com.dotmarketing.portal.struts.DotCustomLoginPostAction;
@@ -39,9 +38,7 @@ public class LoginFactory {
 	public static boolean useCASLoginFilter = new Boolean (Config.getBooleanProperty("FRONTEND_CAS_FILTER_ON",false));
 	/*End of Custom Code*/
 
-    public static boolean doLogin(LoginForm form, HttpServletRequest request, HttpServletResponse response) throws NoSuchUserException {
-        return doLogin(form.getUserName(), form.getPassword(), form.isRememberMe(), request, response);
-    }
+
 
     public static boolean doCookieLogin(String encryptedId, HttpServletRequest request, HttpServletResponse response) {
 
@@ -239,6 +236,13 @@ public class LoginFactory {
 
             // if passwords match
             if (match) {
+                //finally we need to verify if they user can be identified as a front-end or back-end user.
+				if (null != user) {
+					if (!user.isFrontendUser() && !user.isBackendUser()) {
+						SecurityLogger.logInfo(LoginFactory.class, String.format("User `%s` can not be identified neither as front-end nor back-end user ", user.getUserId()));
+						return false;
+					}
+				}
 
             	final HttpSession session = PreventSessionFixationUtil.getInstance().preventSessionFixation(request, true);
             	session.removeAttribute(com.dotmarketing.util.WebKeys.VISITOR);

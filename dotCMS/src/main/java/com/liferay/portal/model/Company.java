@@ -22,14 +22,16 @@
 
 package com.liferay.portal.model;
 
-import java.security.Key;
-import java.util.Locale;
-import java.util.TimeZone;
+import static com.dotmarketing.util.UtilMethods.isSet;
 
 import com.dotmarketing.business.APILocator;
 import com.dotmarketing.util.Logger;
+import com.google.common.hash.Hashing;
 import com.liferay.portal.util.PropsUtil;
 import com.liferay.util.Base64;
+import java.security.Key;
+import java.util.Locale;
+import java.util.TimeZone;
 
 /**
  * <a href="Company.java.html"><b><i>View Source</i></b></a>
@@ -101,6 +103,18 @@ public class Company extends CompanyModel {
 		super.setKey(Base64.objectToString(keyObj));
 	}
 
+	public String getKeyDigest() {
+	    final String key = getKey();
+		if (isSet(key)) {
+			try {
+			 return Hashing.sha256().hashBytes(key.getBytes()).toString();
+			} catch (Exception e) {
+				Logger.error(this, e.getMessage(), e);
+			}
+		}
+		return null;
+	}
+
 	public User getDefaultUser() {
 		User defaultUser = null;
 
@@ -133,6 +147,17 @@ public class Company extends CompanyModel {
 		return _company;
 	}
 
+	public String getBackgroundColor() {
+	  return _company.getSize();
+	}
+	
+	 public String getPrimaryColor() {
+	    return _company.getType();
+	  }
+	  public String getSecondaryColor() {
+      return _company.getStreet();
+    }
+	
 	public void protect() {
 		_company = (Company) this.clone();
 

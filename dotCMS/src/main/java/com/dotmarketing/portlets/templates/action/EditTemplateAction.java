@@ -7,6 +7,8 @@ import com.dotcms.repackage.javax.portlet.ActionRequest;
 import com.dotcms.repackage.javax.portlet.ActionResponse;
 import com.dotcms.repackage.javax.portlet.PortletConfig;
 import com.dotcms.repackage.javax.portlet.WindowState;
+import com.dotcms.repackage.org.apache.struts.action.ActionForm;
+import com.dotcms.repackage.org.apache.struts.action.ActionMapping;
 import com.dotmarketing.beans.Host;
 import com.dotmarketing.beans.Identifier;
 import com.dotmarketing.beans.WebAsset;
@@ -39,8 +41,6 @@ import com.liferay.portlet.ActionRequestImpl;
 import com.liferay.util.servlet.SessionDialogMessage;
 import com.liferay.util.servlet.SessionMessages;
 import org.apache.commons.beanutils.BeanUtils;
-import org.apache.struts.action.ActionForm;
-import org.apache.struts.action.ActionMapping;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpSession;
@@ -81,12 +81,12 @@ public class EditTemplateAction extends DotPortletAction implements
 
 	@WrapInTransaction
 	public void processAction(ActionMapping mapping, ActionForm form,
-			PortletConfig config, ActionRequest req, ActionResponse res)
+							  PortletConfig config, ActionRequest req, ActionResponse res)
 	throws Exception {
 
 		String cmd = req.getParameter(Constants.CMD);
 		String referer = req.getParameter("referer");
-		
+
 
 		//wraps request to get session object
 		ActionRequestImpl reqImpl = (ActionRequestImpl) req;
@@ -107,9 +107,7 @@ public class EditTemplateAction extends DotPortletAction implements
 		HibernateUtil.startTransaction();
 
 		User user = _getUser(req);
-		
-		// Old template used to compare against edited version
-		Template oldTemplate = new Template();
+
 		try {
 			Logger.debug(this, "Calling Retrieve method");
 			_retrieveWebAsset(req, res, config, form, user, Template.class,
@@ -183,8 +181,6 @@ public class EditTemplateAction extends DotPortletAction implements
 				if (Validator.validate(req, form, mapping)) {
 					Logger.debug(this, "Calling Save method for design template");
 					Logger.debug(this, "Calling Save method");
-					// the old template before editing using the inode from el request
-					oldTemplate = APILocator.getTemplateAPI().find(req.getParameter("inode"), user, false);
 					_saveWebAsset(req, res, config, form, user);
 					String subcmd = req.getParameter("subcmd");
 					if ((subcmd != null) && subcmd.equals(com.dotmarketing.util.Constants.PUBLISH)) {
@@ -227,8 +223,6 @@ public class EditTemplateAction extends DotPortletAction implements
 				if (Validator.validate(req, form, mapping)) {
 
 					Logger.debug(this, "Calling Save method");
-					// the old template before editing using the inode from el request
-					oldTemplate = APILocator.getTemplateAPI().find(req.getParameter("inode"), user, false);
 					_saveWebAsset(req, res, config, form, user);
 					String subcmd = req.getParameter("subcmd");
 
@@ -333,7 +327,7 @@ public class EditTemplateAction extends DotPortletAction implements
 								));
 
 				for(String inode  : inodes)	{
-					WebAsset webAsset = (WebAsset) InodeFactory.getInode(inode,Template.class);
+					WebAsset webAsset = APILocator.getTemplateAPI().find(inode,user,false);
 
 					if (canTemplateBeDeleted(webAsset, user, errors)) {
 						WebAssetFactory.deleteAsset(webAsset,user);
@@ -743,40 +737,11 @@ public class EditTemplateAction extends DotPortletAction implements
 	public void _getVersionBackWebAsset(ActionRequest req, ActionResponse res,
 			PortletConfig config, ActionForm form, User user) throws Exception {
 
-		Template versionTemplate = (Template) InodeFactory.getInode(req
-				.getParameter("inode_version"), Template.class);
-
-//		Identifier id = (Identifier)APILocator.getIdentifierAPI().find(versionTemplate);
-
-		//Template workingTemplate = (Template)APILocator.getVersionableAPI().findWorkingVersion(id, APILocator.getUserAPI().getSystemUser(),false);
-
-		//gets containers identifiers children from current template
+		Template versionTemplate = APILocator.getTemplateAPI().find(req.getParameter("inode_version"), user,false);
 
 		APILocator.getVersionableAPI().setWorking(versionTemplate);
 
-		//Template newWorkingTemplate = (Template) super._getVersionBackWebAsset(req, res, config, form, user, Template.class, WebKeys.TEMPLATE_EDIT);
 		new TemplateLoader().invalidate(versionTemplate);
 	}
-
-//	private void updateParseContainerSyntax(Template template){
-//		String tb = template.getBody();
-//		Perl5Matcher matcher = (Perl5Matcher) localP5Matcher.get();
-//		String oldParse;
-//		String newParse;
-//    	while(matcher.contains(tb, parseContainerPattern)){
-//     		MatchResult match = matcher.getMatch();
-//    		int groups = match.groups();
-//     		for(int g=0;g<groups;g++){
-//     			oldParse = match.group(g);
-//     			if(matcher.contains(oldParse, oldContainerPattern)){
-//     				MatchResult matchOld = matcher.getMatch();
-//     				newParse = matchOld.group(0).trim();
-//     				newParse = "#parseContainer('" + newParse + "')";
-//     				tb = StringUtil.replace(tb,oldParse,newParse);
-//     			}
-//     		}
-//     		template.setBody(tb);
-//    	}
-//	}
 
 }

@@ -6,6 +6,9 @@ import com.dotcms.visitor.domain.Visitor;
 import com.dotmarketing.business.APILocator;
 import com.dotmarketing.business.web.LanguageWebAPI;
 import com.dotmarketing.business.web.WebAPILocator;
+import com.dotmarketing.exception.DotDataException;
+import com.dotmarketing.exception.DotSecurityException;
+import com.dotmarketing.portlets.contentlet.business.DotContentletStateException;
 import com.dotmarketing.portlets.languagesmanager.model.Language;
 import com.dotmarketing.portlets.personas.business.PersonaAPI;
 import com.dotmarketing.portlets.personas.model.Persona;
@@ -27,13 +30,22 @@ import java.util.UUID;
 
 public class VisitorAPIImpl implements VisitorAPI {
 
-    private LanguageWebAPI languageWebAPI = WebAPILocator.getLanguageWebAPI();
+    private final LanguageWebAPI languageWebAPI;
 
-
-    @Override
-    public void setLanguageWebAPI(LanguageWebAPI languageWebAPI) {
-        this.languageWebAPI = languageWebAPI;
+    private final PersonaAPI personaAPI ;
+    
+    
+    public VisitorAPIImpl() {
+      this(WebAPILocator.getLanguageWebAPI(),APILocator.getPersonaAPI());
     }
+    
+    
+    public VisitorAPIImpl(LanguageWebAPI languageWebAPI, PersonaAPI personaAPI) {
+      super();
+      this.languageWebAPI = languageWebAPI;
+      this.personaAPI = personaAPI;
+    }
+
 
     @Override
     public Optional<Visitor> getVisitor(HttpServletRequest request) {
@@ -46,7 +58,7 @@ public class VisitorAPIImpl implements VisitorAPI {
         DotPreconditions.checkNotNull(request, IllegalArgumentException.class, "Null Request");
 
         Optional<Visitor> visitorOpt;
-        final PersonaAPI personaAPI = APILocator.getPersonaAPI();
+
 
         if(!create) {
 
@@ -69,27 +81,58 @@ public class VisitorAPIImpl implements VisitorAPI {
         // If we are forcing a persona on a visitor
         if(visitorOpt.isPresent()) {
 
-			if(Objects.nonNull(request.getParameter(WebKeys.CMS_PERSONA_PARAMETER))){
+			if(Objects.nonNull(request.getParameter(WebKeys.CMS_PERSONA_PARAMETER)) ||
+                    Objects.nonNull(request.getAttribute(WebKeys.CMS_PERSONA_PARAMETER))){
 
 				final Visitor visitor   = visitorOpt.get();
 				final PageMode pageMode = PageMode.get(request);
 				try {
 
 					final User user = com.liferay.portal.util.PortalUtil.getUser(request);
-					final Persona persona = pageMode.showLive?
-                            personaAPI.findLive(request.getParameter(WebKeys.CMS_PERSONA_PARAMETER), user, true):
-                            personaAPI.find(request.getParameter(WebKeys.CMS_PERSONA_PARAMETER), user, true);
-					visitor.setPersona(persona);
-				} catch(Exception e) {
+					final String personaIDorTag = Objects.nonNull(request
+                            .getParameter(WebKeys.CMS_PERSONA_PARAMETER)) ? request
+                            .getParameter(WebKeys.CMS_PERSONA_PARAMETER) :
+                            (String) request.getAttribute(WebKeys.CMS_PERSONA_PARAMETER);
 
-                    Logger.error(this, e.getMessage()); // trying to be no so much noise
+                    final Persona persona = getPersona(pageMode, user, personaIDorTag);
+					visitor.setPersona(persona);
+				}catch(DotContentletStateException e) {
+				    // This is meant to catch the "Can't find contentlet" error.
                     Logger.debug(this, e.getMessage(), e);
+                    visitor.setPersona(null);
+                } catch(Exception e) {
+                    //Anything else will be reported here.
+                    Logger.error(this, e);
 					visitor.setPersona(null);
 				}
 			}
         }
 
         return visitorOpt;
+    }
+
+    private Persona getPersona(PageMode pageMode, User user, String personaID)
+            throws DotDataException, DotSecurityException {
+        Persona persona = null;
+
+        if (pageMode.showLive) {
+            persona = personaAPI.findLive(personaID, user, true);
+        } else {
+            persona = personaAPI.find(personaID, user, true);
+        }
+
+        if(persona==null) {
+            persona = personaAPI.findPersonaByTag(personaID, user, true)
+                    .orElse(null);
+        }
+
+        return persona;
+    }
+
+    public void removeVisitor(final HttpServletRequest request){
+        DotPreconditions.checkNotNull(request, IllegalArgumentException.class, "Null Request");
+        final HttpSession session = request.getSession(false);
+        session.removeAttribute(WebKeys.VISITOR);
     }
 
     private Visitor createVisitor(final HttpServletRequest request) {

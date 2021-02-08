@@ -4,14 +4,14 @@ import com.dotcms.auth.providers.jwt.factories.ApiTokenCache;
 import com.dotcms.business.SystemCache;
 import com.dotcms.cache.KeyValueCache;
 import com.dotcms.cache.KeyValueCacheImpl;
-import com.dotcms.cache.VanityUrlCache;
-import com.dotcms.cache.VanityUrlCacheImpl;
+import com.dotcms.content.elasticsearch.ESQueryCache;
 import com.dotcms.content.elasticsearch.business.IndiciesCache;
 import com.dotcms.content.elasticsearch.business.IndiciesCacheImpl;
 import com.dotcms.contenttype.business.ContentTypeCache2;
 import com.dotcms.contenttype.business.ContentTypeCache2Impl;
 import com.dotcms.csspreproc.CSSCache;
 import com.dotcms.csspreproc.CSSCacheImpl;
+import com.dotcms.graphql.business.GraphQLSchemaCache;
 import com.dotcms.notifications.business.NewNotificationCache;
 import com.dotcms.notifications.business.NewNotificationCacheImpl;
 import com.dotcms.publisher.assets.business.PushedAssetsCache;
@@ -21,6 +21,10 @@ import com.dotcms.publisher.endpoint.business.PublishingEndPointCacheImpl;
 import com.dotcms.rendering.velocity.services.DotResourceCache;
 import com.dotcms.rendering.velocity.viewtools.navigation.NavToolCache;
 import com.dotcms.rendering.velocity.viewtools.navigation.NavToolCacheImpl;
+import com.dotcms.security.apps.AppsCache;
+import com.dotcms.security.apps.AppsCacheImpl;
+import com.dotcms.vanityurl.cache.VanityUrlCache;
+import com.dotcms.vanityurl.cache.VanityUrlCacheImpl;
 import com.dotmarketing.business.cache.transport.CacheTransport;
 import com.dotmarketing.business.portal.PortletCache;
 import com.dotmarketing.cache.ContentTypeCache;
@@ -177,10 +181,6 @@ public class CacheLocator extends Locator<CacheIndex>{
 		return (UserCache)getInstance(CacheIndex.User);
 	}
 
-	public static UserProxyCache getUserProxyCache() {
-		return (UserProxyCache)getInstance(CacheIndex.Userproxy);
-	}
-
 	public static LayoutCache getLayoutCache() {
 		return (LayoutCache)getInstance(CacheIndex.Layout);
 	}
@@ -281,6 +281,11 @@ public class CacheLocator extends Locator<CacheIndex>{
     public static MultiTreeCache getMultiTreeCache() {
         return (MultiTreeCache) getInstance(CacheIndex.MultiTreeCache);
     }
+    
+    public static ESQueryCache getESQueryCache() {
+        return (ESQueryCache) getInstance(CacheIndex.ESQueryCache);
+    }
+    
     /**
      * 
      * @return
@@ -291,6 +296,22 @@ public class CacheLocator extends Locator<CacheIndex>{
     public static ApiTokenCache getApiTokenCache() {
         return (ApiTokenCache) getInstance(CacheIndex.ApiTokenCache);
     }
+
+	/**
+	 * This will get you an instance of the singleton apps cache.
+ 	 * @return
+	 */
+	public static AppsCache getAppsCache() {
+		return (AppsCache) getInstance(CacheIndex.AppsCache);
+	}
+
+	/**
+	 * This will get you an instance of the singleton GraphQL Schema cache.
+	 * @return
+	 */
+	public static GraphQLSchemaCache getGraphQLSchemaCache() {
+		return (GraphQLSchemaCache) getInstance(CacheIndex.GraphQLSchemaCache);
+	}
 	/**
 	 * The legacy cache administrator will invalidate cache entries within a cluster
 	 * on a put where the non legacy one will not.
@@ -389,7 +410,10 @@ enum CacheIndex
 	MultiTreeCache("MultiTree Cache"),
 	ApiTokenCache("ApiTokenCache"),
 	PortletCache("PortletCache"),
-	KeyValueCache("Key/Value Cache");
+	ESQueryCache("ESQueryCache"),
+	KeyValueCache("Key/Value Cache"),
+	AppsCache("Apps"),
+	GraphQLSchemaCache("GraphQLSchemaCache");
 
 	Cachable create() {
 		switch(this) {
@@ -406,7 +430,7 @@ enum CacheIndex
 	      	case Plugin : return new PluginCacheImpl();
 	      	case Language : return new LanguageCacheImpl();
 	      	case User : return new UserCacheImpl();
-	      	case Userproxy : return new UserProxyCacheImpl();
+
 	      	case Layout : return new LayoutCacheImpl();
 	      	case CMSRole : return new com.dotmarketing.business.RoleCacheImpl();
 	      	case HTMLPage : return new HTMLPageCacheImpl();
@@ -436,7 +460,10 @@ enum CacheIndex
 	      	case MultiTreeCache : return new MultiTreeCache();
 	      	case ApiTokenCache : return new ApiTokenCache();
 	      	case PortletCache : return new PortletCache();
-	      	
+			case AppsCache: return new AppsCacheImpl();
+	      	case ESQueryCache : return new com.dotcms.content.elasticsearch.ESQueryCache();
+	      	case GraphQLSchemaCache : return new GraphQLSchemaCache();
+
 		}
 		throw new AssertionError("Unknown Cache index: " + this);
 	}

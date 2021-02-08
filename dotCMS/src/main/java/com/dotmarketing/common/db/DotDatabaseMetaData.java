@@ -2,12 +2,17 @@ package com.dotmarketing.common.db;
 
 import com.dotcms.util.CloseUtils;
 import com.dotmarketing.db.DbConnectionFactory;
+import com.dotmarketing.db.DbType;
+import com.dotmarketing.exception.DotDataException;
 import com.dotmarketing.startup.AbstractJDBCStartupTask;
 import com.dotmarketing.util.Logger;
+import com.dotmarketing.util.UtilMethods;
 import com.liferay.util.StringPool;
 
 import java.sql.*;
 import java.util.*;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Encapsulates database metada operations operations.
@@ -17,6 +22,7 @@ public class DotDatabaseMetaData {
 
     public static final String ALTER_TABLE = "ALTER TABLE ";
     public static final String DROP_FOREIGN_KEY = " DROP FOREIGN KEY ";
+    public static final String DROP_INDEX = " DROP INDEX ";
 
     /**
      * Find the foreign key on the table, with the primary keys and columns assigned.
@@ -79,7 +85,10 @@ public class DotDatabaseMetaData {
         ForeignKey foundForeignKey = null;
         final List<ForeignKey> foreignKeys = this.getForeignKeys(connection, foreignKeyTableName);
 
-        for (ForeignKey foreignKey : foreignKeys) {
+        Logger.info(this, "**Printing foreign keys");
+
+        for (final ForeignKey foreignKey : foreignKeys) {
+            System.out.println("foreignKey = " + foreignKey);
 
             if (primaryKeyTableName.equalsIgnoreCase(foreignKey.getPrimaryKeyTableName()) &&
                     foreignKeyTableName.equalsIgnoreCase(foreignKey.getForeignKeyTableName()) &&
@@ -315,19 +324,18 @@ public class DotDatabaseMetaData {
         }
     } // executeDropForeignKeyMySql.
 
-
     /**
-     * Returns the columns list of the table as a list
+     * Returns true if the table already exists
      * @param connection {@link Connection}
      * @param tableName  {@link String}
-     * @return
+     * @return Boolean true if exists, otherwise false
+     * @throws SQLException
      */
-    public Set<String> getColumnNames (final Connection connection, final String tableName) throws SQLException {
+    public boolean tableExists(final Connection connection, final String tableName) throws SQLException {
 
-        final Set<String> columns = new LinkedHashSet<>();
+        boolean exists                        = false;
         DatabaseMetaData databaseMetaData     = null;
         ResultSet        resultSet            = null;
-        ForeignKey       foreignKey           = null;
         String           schema               = null;
         String           table                = tableName;
 
@@ -340,8 +348,49 @@ public class DotDatabaseMetaData {
                 schema = databaseMetaData.getUserName();
             }
 
-            resultSet = databaseMetaData.getColumns
+            resultSet = databaseMetaData.getTables
                     (connection.getCatalog(), schema, table, null);
+
+            // Iterates over the foreign foreignKey columns
+            exists = resultSet.next();
+        } catch (SQLException e) {
+            Logger.error(this,
+                    "An error occurred when getting the the table: " + e.getMessage(), e);
+            throw e;
+        }
+
+        return exists;
+    }
+
+    public static ResultSet getColumnsMetaData(final Connection connection, final String tableName) throws SQLException {
+        final DatabaseMetaData databaseMetaData = connection.getMetaData();
+        String schema = null;
+        String table = tableName;
+
+        if (DbConnectionFactory.isOracle()) {
+            table = table.toUpperCase();
+            schema = databaseMetaData.getUserName();
+        }
+
+        return databaseMetaData.getColumns
+                (connection.getCatalog(), schema, table, null);
+    }
+
+
+    /**
+     * Returns the columns list of the table as a list
+     * @param connection {@link Connection}
+     * @param tableName  {@link String}
+     * @return
+     */
+    public Set<String> getColumnNames (final Connection connection, final String tableName) throws SQLException {
+
+        final Set<String> columns = new LinkedHashSet<>();
+        ResultSet        resultSet            = null;
+
+        try {
+
+            resultSet = this.getColumnsMetaData(connection, tableName);
 
             // Iterates over the foreign foreignKey columns
             while (resultSet.next()) {
@@ -418,5 +467,227 @@ public class DotDatabaseMetaData {
 
         return primaryKey;
     }
+
+    /**
+     * Drops the column depending on the db
+     * @param connection {@link Connection}
+     * @param tableName {@link String}
+     * @param columnName {@link String}
+     * @throws SQLException
+     */ 
+    public void dropColumn(final Connection connection, final String tableName, final String columnName) throws SQLException {
+
+        if (DbConnectionFactory.isMySql()) {
+            // Drop column constraints
+            this.dropColumnMySQLDependencies(connection, tableName, columnName);
+        } else if (DbConnectionFactory.isMsSql()) {
+            this.dropColumnMSSQLDependencies(connection, tableName, columnName);
+        }
+
+        // Drop the column:
+        connection.createStatement().executeUpdate("ALTER TABLE " + tableName + " DROP COLUMN " + columnName); // Drop the column
+    }
+
+    private void dropColumnMySQLDependencies(final Connection connection, final String tableName, final String columnName) throws SQLException {
+
+        try (final ResultSet resultSet = connection.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)
+                .executeQuery("select CONSTRAINT_NAME from INFORMATION_SCHEMA.KEY_COLUMN_USAGE where CONSTRAINT_SCHEMA = SCHEMA() and TABLE_NAME = '" +
+                        tableName + "' and COLUMN_NAME = '" + columnName + "'")) {
+
+            while (resultSet.next()) {
+                final String constraintName = resultSet.getString("CONSTRAINT_NAME");
+                this.executeDropConstraint(connection, tableName, constraintName);
+            }
+        }
+
+        // Drop column indexes
+        try (final ResultSet resultSet = connection.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)
+                .executeQuery("SHOW INDEX FROM " + tableName + " where column_name = '" + columnName + "'")) {
+
+            while (resultSet.next()) {
+                final String keyName = resultSet.getString("Key_name");
+                this.dropIndex(tableName, keyName);
+            }
+        }
+    }
+
+    private void dropColumnMSSQLDependencies(final Connection connection, final String tableName, final String columnName) throws SQLException {
+
+        final List<String>  constraints = getColumnConstraintsMSSQL(connection, tableName, columnName);
+        if (UtilMethods.isSet(constraints)) {
+
+            for (final String constraintName : constraints) {
+                this.executeDropConstraint(connection, tableName, constraintName);
+            }
+        }
+    }
+
+    private List<String> getColumnConstraintsMSSQL (final Connection connection, final String tableName, final String columnName) throws SQLException {
+
+        final List<String>  constraints = new ArrayList<>();
+
+        try (final Statement statement = connection.createStatement()) {
+            try (final ResultSet resultSet = statement.executeQuery("SELECT default_constraints.name FROM sys.all_columns INNER JOIN sys.tables\n" +
+                    "        ON all_columns.object_id = tables.object_id\n" +
+                    "        INNER JOIN sys.schemas\n" +
+                    "        ON tables.schema_id = schemas.schema_id\n" +
+                    "        INNER JOIN sys.default_constraints\n" +
+                    "        ON all_columns.default_object_id = default_constraints.object_id\n" +
+                    "WHERE tables.name = '" + tableName + "' AND all_columns.name = '" + columnName + "'")) {
+
+                while (resultSet.next()) {
+
+                    constraints.add(resultSet.getString(1));
+                }
+            }
+        }
+
+        return constraints;
+    }
+
+    public void dropIndex(final String tableName, final String indexName) throws SQLException {
+        final DbType dbType = DbType.getDbType(DbConnectionFactory.getDBType());
+
+        if(dbType == DbType.MYSQL){
+            new DotConnect().executeStatement(String.format("%s %s %s %s",ALTER_TABLE,tableName,DROP_INDEX,indexName));
+            return;
+        }
+
+        if(dbType == DbType.MSSQL){
+            new DotConnect().executeStatement(String.format("%s %s.%s",DROP_INDEX, tableName, indexName));
+            return;
+        }
+
+        new DotConnect().executeStatement(String.format("%s %s",DROP_INDEX, indexName));
+
+    }
+
+    public List<String> getConstraints(final String tableName) throws DotDataException {
+        final DotConnect dotConnect = new DotConnect();
+        if (DbConnectionFactory.isPostgres()) {
+            return getConstraintsPostgres(tableName, dotConnect);
+        }
+
+        if (DbConnectionFactory.isOracle()) {
+            return getConstraintsOracleSQL(tableName, dotConnect);
+        }
+
+        if (DbConnectionFactory.isMsSql()) {
+            return getConstraintsMSSQL(tableName, dotConnect);
+        }
+
+        if (DbConnectionFactory.isMySql()) {
+            return getConstraintsMySQL(tableName, dotConnect);
+        }
+
+        throw new DotDataException("Unknown database type.");
+    }
+
+    /**
+     * Indicates if a column exists on a given table
+     * @param tableName
+     * @param columnName
+     * @return - boolean indicating if the column exists on the referenced table
+     * @throws SQLException
+     */
+    public boolean hasColumn(final String tableName, final String columnName) throws SQLException {
+       return this.getColumnNames(DbConnectionFactory.getConnection(), tableName).stream()
+                .anyMatch(dbcolumn -> dbcolumn.equalsIgnoreCase(columnName));
+    }
+
+    private static String POSTGRES_CONSTRAINT_SQL =
+            " SELECT con.*\n"
+            + "       FROM pg_catalog.pg_constraint con\n"
+            + "            INNER JOIN pg_catalog.pg_class rel\n"
+            + "                       ON rel.oid = con.conrelid\n"
+            + "            INNER JOIN pg_catalog.pg_namespace nsp\n"
+            + "                       ON nsp.oid = connamespace\n"
+            + "       WHERE  nsp.nspname = 'public' \n"
+            + "             AND rel.relname = '%s' ";
+
+    private List<String> getConstraintsPostgres(final String tableName, final DotConnect dotConnect) throws DotDataException {
+        dotConnect.setSQL(String.format(POSTGRES_CONSTRAINT_SQL, tableName));
+        final List<Map> constraintsMeta = dotConnect.loadResults();
+        return constraintsMeta.stream().map(map -> map.get("conname").toString()).collect(Collectors.toList());
+    }
+
+    private static final String MYSQL_CONSTRAINT_SQL =
+            " SELECT column_name, constraint_name \n"
+            + " FROM information_schema.KEY_COLUMN_USAGE\n"
+            + " WHERE TABLE_NAME = 'workflow_task'";
+
+    private List<String> getConstraintsMySQL(final String tableName, final DotConnect dotConnect) throws DotDataException {
+        dotConnect.setSQL(String.format(MYSQL_CONSTRAINT_SQL, tableName));
+        final List<Map> constraintsMeta = dotConnect.loadResults();
+        return constraintsMeta.stream().map(map -> map.get("constraint_name").toString()).collect(Collectors.toList());
+    }
+
+    private static final String ORACLE_CONSTRAINT_SQL = "SELECT * FROM ALL_CONSTRAINTS WHERE table_name = '%s' ";
+
+    private List<String> getConstraintsOracleSQL(final String tableName, final DotConnect dotConnect) throws DotDataException {
+        dotConnect.setSQL(String.format(ORACLE_CONSTRAINT_SQL, tableName.toUpperCase()));
+        final List<Map> constraintsMeta = dotConnect.loadResults();
+        return constraintsMeta.stream().map(map -> map.get("constraint_name").toString()).collect(Collectors.toList());
+    }
+
+    private static final String MS_SQL_INDEX = "select  t.[name] as table_view, \n"
+            + "    case when t.[type] = 'U' then 'Table'\n"
+            + "        when t.[type] = 'V' then 'View'\n"
+            + "        end as [object_type],\n"
+            + "    i.index_id,\n"
+            + "    case when i.is_primary_key = 1 then 'Primary key'\n"
+            + "        when i.is_unique = 1 then 'Unique'\n"
+            + "        else 'Not unique' end as [type],\n"
+            + "    i.[name] as index_name,\n"
+            + "    substring(column_names, 1, len(column_names)-1) as [columns],\n"
+            + "    case when i.[type] = 1 then 'Clustered index'\n"
+            + "        when i.[type] = 2 then 'Nonclustered unique index'\n"
+            + "        when i.[type] = 3 then 'XML index'\n"
+            + "        when i.[type] = 4 then 'Spatial index'\n"
+            + "        when i.[type] = 5 then 'Clustered columnstore index'\n"
+            + "        when i.[type] = 6 then 'Nonclustered columnstore index'\n"
+            + "        when i.[type] = 7 then 'Nonclustered hash index'\n"
+            + "        end as index_type\n"
+            + "from sys.objects t\n"
+            + "    inner join sys.indexes i\n"
+            + "        on t.object_id = i.object_id\n"
+            + "    cross apply (select col.[name] + ', '\n"
+            + "                    from sys.index_columns ic\n"
+            + "                        inner join sys.columns col\n"
+            + "                            on ic.object_id = col.object_id\n"
+            + "                            and ic.column_id = col.column_id\n"
+            + "                    where ic.object_id = t.object_id\n"
+            + "                        and ic.index_id = i.index_id\n"
+            + "                            order by col.column_id\n"
+            + "                            for xml path ('') ) D (column_names)\n"
+            + "where t.is_ms_shipped <> 1\n"
+            + "and index_id > 0 and  t.[name] = '%s'\n"
+            + "order by schema_name(t.schema_id) + '.' + t.[name], i.index_id";
+
+
+    private static final String MS_SQL_CONSTRAINTS = "\n"
+            + "SELECT default_constraints.name FROM sys.all_columns INNER JOIN sys.tables\n"
+            + "  ON all_columns.object_id = tables.object_id\n"
+            + "  INNER JOIN sys.schemas\n"
+            + "  ON tables.schema_id = schemas.schema_id\n"
+            + "  INNER JOIN sys.default_constraints \n"
+            + "  ON all_columns.default_object_id = default_constraints.object_id \n"
+            + " WHERE tables.name = '%s'";
+
+    private List<String> getConstraintsMSSQL(final String tableName, final DotConnect dotConnect) throws DotDataException {
+        //unique constraints are stored as indices
+        dotConnect.setSQL(String.format(MS_SQL_INDEX, tableName));
+        final List<Map> indexMeta = dotConnect.loadResults();
+
+        dotConnect.setSQL(String.format(MS_SQL_CONSTRAINTS,tableName));
+        final List<Map> constraintsMeta = dotConnect.loadResults();
+
+        return Stream.concat(
+                indexMeta.stream().map(map -> map.get("index_name").toString()),
+                constraintsMeta.stream().map(map -> map.get("name").toString())
+        ).collect(Collectors.toList());
+
+    }
+
 } // E:O:F:DotDatabaseMetaData.
 

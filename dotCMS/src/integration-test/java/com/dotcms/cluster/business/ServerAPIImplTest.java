@@ -1,24 +1,24 @@
 package com.dotcms.cluster.business;
 
 import static org.junit.Assert.assertEquals;
-
-import java.io.File;
-import java.io.FileFilter;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.stream.Collectors;
-
-import org.junit.BeforeClass;
-import org.junit.Test;
+import static org.junit.Assert.assertNotNull;
 
 import com.dotcms.cluster.bean.Server;
 import com.dotcms.enterprise.cluster.ClusterFactory;
+import com.dotcms.enterprise.license.LicenseManager;
 import com.dotcms.util.IntegrationTestInitService;
 import com.dotmarketing.business.APILocator;
 import com.dotmarketing.util.ThreadUtils;
 import com.dotmarketing.util.UUIDGenerator;
 import com.dotmarketing.util.UUIDUtil;
 import com.liferay.util.FileUtil;
+import java.io.File;
+import java.io.FileFilter;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.stream.Collectors;
+import org.junit.BeforeClass;
+import org.junit.Test;
 
 public class ServerAPIImplTest {
 
@@ -35,6 +35,9 @@ public class ServerAPIImplTest {
                 APILocator.getFileAssetAPI().getRealAssetsRootPath() + java.io.File.separator
                         + "server");
 
+        if (!servers.exists()) {
+            servers.mkdirs();
+        }
         FileUtil.listFilesRecursively(servers, new FileFilter() {
             @Override
             public boolean accept(File pathname) {
@@ -75,6 +78,12 @@ public class ServerAPIImplTest {
             }
         }).forEach(f -> FileUtil.deltree(f));
         assertEquals(serverApi.readServerId(), serverApi.getOldestServer());
+    }
+
+    @Test
+    public void testGetServerStartTime() {
+        final ServerAPI serverApi = APILocator.getServerAPI();
+        assertNotNull(serverApi.getServerStartTime());
     }
 
 }

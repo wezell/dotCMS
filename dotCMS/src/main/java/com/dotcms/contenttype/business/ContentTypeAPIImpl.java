@@ -6,6 +6,7 @@ import com.dotcms.api.system.event.SystemEventType;
 import com.dotcms.api.system.event.Visibility;
 import com.dotcms.business.CloseDBIfOpened;
 import com.dotcms.business.WrapInTransaction;
+import com.dotcms.concurrent.DotConcurrentFactory;
 import com.dotcms.contenttype.exception.NotFoundInDbException;
 import com.dotcms.contenttype.model.event.ContentTypeDeletedEvent;
 import com.dotcms.contenttype.model.event.ContentTypeSavedEvent;
@@ -15,7 +16,10 @@ import com.dotcms.contenttype.model.field.FieldVariable;
 import com.dotcms.contenttype.model.type.BaseContentType;
 import com.dotcms.contenttype.model.type.ContentType;
 import com.dotcms.contenttype.model.type.ContentTypeBuilder;
+import com.dotcms.contenttype.model.type.EnterpriseType;
 import com.dotcms.contenttype.model.type.UrlMapable;
+import com.dotcms.enterprise.LicenseUtil;
+import com.dotcms.enterprise.license.LicenseLevel;
 import com.dotcms.exception.BaseRuntimeInternationalizationException;
 import com.google.common.collect.ImmutableList;
 import com.dotcms.system.event.local.business.LocalSystemEventsAPI;
@@ -34,6 +38,7 @@ import com.dotmarketing.util.*;
 import com.dotmarketing.util.json.JSONArray;
 import com.dotmarketing.util.json.JSONObject;
 import com.liferay.portal.model.User;
+import java.util.stream.Collectors;
 import org.elasticsearch.action.search.SearchResponse;
 
 import java.util.*;
@@ -71,7 +76,7 @@ public class ContentTypeAPIImpl implements ContentTypeAPI {
   }
 
 
-  @CloseDBIfOpened
+  @WrapInTransaction
   @Override
   public void delete(ContentType type) throws DotSecurityException, DotDataException {
     perms.checkPermission(type, PermissionLevel.EDIT_PERMISSIONS, user);
@@ -129,6 +134,16 @@ public class ContentTypeAPIImpl implements ContentTypeAPI {
 
   @CloseDBIfOpened
   @Override
+  public List<ContentType> findAllRespectingLicense() throws DotDataException {
+    List<ContentType> allTypes = findAll();
+    // exclude ee types when no license
+    return LicenseUtil.getLevel() <= LicenseLevel.COMMUNITY.level
+            ? allTypes.stream().filter((type) ->!(type instanceof EnterpriseType)).collect(Collectors.toList())
+            : allTypes;
+  }
+
+  @CloseDBIfOpened
+  @Override
   public List<ContentType> findAll(String orderBy) throws DotDataException {
 
     try {
@@ -177,6 +192,7 @@ public class ContentTypeAPIImpl implements ContentTypeAPI {
 
 
 
+  @WrapInTransaction
   @Override
   public ContentType save(ContentType type) throws DotDataException, DotSecurityException {
     return save(type, null, null);
@@ -324,7 +340,7 @@ public class ContentTypeAPIImpl implements ContentTypeAPI {
     try {
       SearchResponse raw = APILocator.getEsSearchAPI().esSearchRaw(query.toLowerCase(), false, user, false);
 
-      JSONObject jo = new JSONObject(raw.toString()).getJSONObject("aggregations").getJSONObject("entries");
+      JSONObject jo = new JSONObject(raw.toString()).getJSONObject("aggregations").getJSONObject("sterms#entries");
       JSONArray ja = jo.getJSONArray("buckets");
 
       Map<String, Long> result = new HashMap<>();
@@ -384,12 +400,14 @@ public class ContentTypeAPIImpl implements ContentTypeAPI {
     return contentTypeFactory.findUrlMapped();
   }
 
+  @WrapInTransaction
   @Override
   public ContentType save(ContentType contentType, List<Field> newFields)
       throws DotDataException, DotSecurityException {
     return save(contentType, newFields, null);
   }
 
+  @WrapInTransaction
   @Override
   public ContentType save(ContentType contentType, List<Field> newFields, List<FieldVariable> newFieldVariables)
       throws DotDataException, DotSecurityException {
@@ -478,14 +496,14 @@ public class ContentTypeAPIImpl implements ContentTypeAPI {
     contentTypeToSave = this.contentTypeFactory.save(contentTypeToSave);
 
     if (oldType != null) {
-      if (fireUpdateIdentifiers(oldType.expireDateVar(), contentTypeToSave.expireDateVar())) {
 
-        IdentifierDateJob.triggerJobImmediately(oldType, user);
-      } else if (fireUpdateIdentifiers(oldType.publishDateVar(), contentTypeToSave.publishDateVar())) {
-
-        IdentifierDateJob.triggerJobImmediately(oldType, user);
-      }
-      perms.resetPermissionReferences(contentTypeToSave);
+        final ContentType oldOldType = oldType;
+        if (fireUpdateIdentifiers(oldType.expireDateVar(), contentTypeToSave.expireDateVar())) {
+            IdentifierDateJob.triggerJobImmediately(oldOldType, user);
+        } else if (fireUpdateIdentifiers(oldType.publishDateVar(), contentTypeToSave.publishDateVar())) {
+            IdentifierDateJob.triggerJobImmediately(oldOldType, user);
+        }
+        perms.resetPermissionReferences(contentTypeToSave);
     }
     ActivityLogger.logInfo(getClass(), "Save ContentType Action",
         "User " + user.getUserId() + "/" + user.getFullName() + " added ContentType " + contentTypeToSave.name()
@@ -499,7 +517,7 @@ public class ContentTypeAPIImpl implements ContentTypeAPI {
 
       for (Field oldField : oldFields) {
         if (!newFields.stream().anyMatch(f -> f.id().equals(oldField.id()))) {
-          if (!oldField.fixed()) {
+          if (!oldField.fixed() && !oldField.readOnly()) {
             Logger.info(this, "Deleting no longer needed Field: " + oldField.name() + " with ID: " + oldField.id()
                 + ", from Content Type: " + contentTypeToSave.name());
 
@@ -518,7 +536,7 @@ public class ContentTypeAPIImpl implements ContentTypeAPI {
 
         field = this.checkContentTypeFields(contentTypeToSave, field);
         if (!varNamesCantDelete.containsKey(field.variable())) {
-          fieldAPI.save(field, APILocator.systemUser());
+          fieldAPI.save(field, APILocator.systemUser(), false);
         } else {
           // We replace the newField-ID with the oldField-ID in order to be able to update the
           // Field
@@ -529,7 +547,7 @@ public class ContentTypeAPIImpl implements ContentTypeAPI {
 
             // Create a copy of the new Field with the oldField-ID,
             field = FieldBuilder.builder(field).id(oldField.id()).build();
-            fieldAPI.save(field, APILocator.systemUser());
+            fieldAPI.save(field, APILocator.systemUser(), false);
           } else {
             // If the field don't match on VariableName and DBColumn we log an error.
             Logger.error(this, "Can't save Field with already existing VariableName: " + field.variable() + ", id: "

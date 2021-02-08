@@ -327,7 +327,6 @@
             }
 
         }
-
         return formData;
 
     }
@@ -409,7 +408,6 @@
         }else {
             isContentSaving = true;
         }
-
         ContentletAjax.saveContent(fmData,isAutoSave,isCheckin,publish,saveContentCallback);
     }
 
@@ -583,7 +581,6 @@
 
         dijit.byId('savingContentDialog').hide();
         resetHasChanged();
-
         // Show DotContentletValidationExceptions.
         if(data["saveContentErrors"] && data["saveContentErrors"][0] != null ){
             var errorDisplayElement = dijit.byId('saveContentErrors');
@@ -644,16 +641,15 @@
             }
 
             if((data["referer"] != null && data["referer"] != '' && !data["contentletLocked"])) {
-                if (data['isHtmlPage'] && workingContentletInode.length === 0) {
-                    customEventDetail = {
-                        name: 'close'
+                if (data['isHtmlPage'] && workingContentletInode.length === 0 && !data["referer"].includes("relend")) {
+                    customEventDetail = {	
+                        name: 'close'	
                     };
                     var params = data['htmlPageReferer'].split('?')[1].split('&');
                     var languageQueryParam = params.find(function(queryParam) {
                         return queryParam.startsWith('com.dotmarketing.htmlpage.language');
                     });
                     var languageId = languageQueryParam.split('=')[1];
-                    
                     window.top.location = '/dotAdmin/#/edit-page/content?url=' + data['htmlPageReferer'].split('?')[0] + '&language_id=' + languageId;
                 }
             }
@@ -676,7 +672,6 @@
                 });
             }
         }
-
         var customEvent = document.createEvent('CustomEvent');
         customEvent.initCustomEvent('ng-event', false, false, customEventDetail);
         document.dispatchEvent(customEvent);
@@ -746,9 +741,6 @@
             dojo.empty(myDiv);
         }
         var hideRulePushOptions = false
-        <%if(contentlet.getStructure().isHTMLPageAsset()){%>
-        hideRulePushOptions=true;
-        <%}%>
         myCp = new dojox.layout.ContentPane({
             id : "contentletRulezDivCp",
             style: "height:100%",
@@ -759,89 +751,7 @@
     }
 
 
-    function saveBinaryFileOnContent(fieldInode, fieldVarName, fieldContentlet, fileName){
-        var fieldRelatedData = {"fieldContentlet" : fieldContentlet,
-            "fieldVarName" : fieldVarName,
-            "fieldInode" : fieldInode,
-            "fileName" : fileName};
-        var callMetaData = { callback:saveBinaryFileOnContentCallback, arg: fieldRelatedData };
-        ContentletAjax.saveBinaryFileOnContent(fileName,fieldInode,callMetaData);
-    }
-
-    function saveBinaryFileOnContentCallback(data, fieldRelatedData){
-
-        if(data["contentletInode"] != null && isInodeSet(data["contentletInode"])){
-
-            var elements = document.getElementsByName(fieldRelatedData['fieldContentlet']);
-
-            for(var i=0; i<elements.length; i++) {
-                if(elements[i].tagName.toLowerCase() =="input") {
-                    elements[i].value = data["contentletInode"];
-                }
-            }
-
-            var thumbnailParentDiv = document.createElement("div");
-            thumbnailParentDiv.setAttribute("id",'thumbnailParent'+fieldRelatedData['fieldVarName']);
-            var fieldDiv = dojo.byId(fieldRelatedData['fieldVarName']+'_field');
-            if(fieldDiv.childNodes.length > 0){
-                fieldDiv.insertBefore(thumbnailParentDiv,fieldDiv.childNodes[0])
-            }else{
-                fieldDiv.appendChild(thumbnailParentDiv);
-            }
-
-            var license = <%=LicenseUtil.getLevel()%>;
-            var licenseLevelStandard = <%=LicenseLevel.STANDARD.level%>;
-            if ( license <= licenseLevelStandard ||  fieldRelatedData['fileName'].toLowerCase().endsWith("svg")){
-                var newFileDialogTitle = "<%=LanguageUtil.get(pageContext,"Image") %>";
-
-                var newFileDialogContent = '<div style="text-align:center;margin:auto;overflow:auto;width:700px;height:400px;">'
-                    + '<img src="/contentAsset/image/'+data["contentletInode"]+'/fileAsset/?byInode=1"/>'
-                    + '</div>'
-                    + '<div class="callOutBox">'
-                    + '<%=LanguageUtil.get(pageContext,"dotCMS-Enterprise-comes-with-an-advanced-Image-Editor-tool") %>'
-                    + '</div>';
-
-                if(dijit.byId(data['contentletInode']+'_Dialog') == undefined){
-                    var newFileDialog = new dijit.Dialog({
-                        id: data['contentletInode']+'_Dialog',
-                        title: newFileDialogTitle,
-                        content: newFileDialogContent,
-                        style: "overflow:auto;width:760px;height:540px;"
-                    });
-                }
-
-                var thumbNailImg = document.createElement("img");
-                var thumbnailImage;
-
-                if(!fieldRelatedData.fileName.toLowerCase().endsWith('.svg')) {
-                    thumbnailImage = "/contentAsset/image/"+data['contentletInode']+"/fileAsset/?byInode=1&filter=Thumbnail&thumbnail_w=300&thumbnail_h=300";
-                }else{
-                    thumbnailImage = "/contentAsset/image/" + data['contentletInode'] + "/fileAsset/?byInode=1";
-                }
-
-                thumbNailImg.setAttribute("src", thumbnailImage);
-                thumbNailImg.setAttribute("onmouseover","dojo.attr(this, 'className', 'thumbnailDivHover');");
-                thumbNailImg.setAttribute("onmouseout","dojo.attr(this, 'className', 'thumbnailDiv');");
-                thumbNailImg.setAttribute("onclick","dijit.byId('"+data['contentletInode']+'_Dialog'+"').show()");
-                thumbnailParentDiv.appendChild(thumbNailImg);
-
-            } else {
-
-                var newImageEditor = new dotcms.dijit.image.ImageEditor({
-                    editImageText : "<%= LanguageUtil.get(pageContext, "Edit-Image") %>",
-                    inode : data["contentletInode"],
-                    fieldName : "fileAsset",
-                    binaryFieldId : "binary1",
-                    fieldContentletId : "binary1",
-                    saveAsFileName : fieldRelatedData['fileName']
-                    //class : "thumbnailDiv"+fieldRelatedData['fieldVarName'],
-                    //parentNode: thumbnailParentDiv
-                });
-                newImageEditor.placeAt(thumbnailParentDiv);
-
-            }
-        }
-    }
+    
 
     //*************************************
     //
@@ -885,10 +795,8 @@
                     expireDate:expireDate,
                     structInode:structInode
                 };
-
                 var pushHandler = new dotcms.dojo.push.PushHandler('<%=LanguageUtil.get(pageContext, "Workflow-Action")%>');
-                pushHandler.showWorkflowEnabledDialog(workflow, saveAssignCallBack);
-                return;
+                pushHandler.showWorkflowEnabledDialog(workflow, saveAssignCallBack, false, true);
 
             } else{
                 dojo.byId("wfActionId").value=wfId;
@@ -898,9 +806,27 @@
         }
     });
 
+    function saveAssignCallBackAngular (actionId, formData) {
+        // END: PUSH PUBLISHING ACTIONLET
+        dojo.byId("wfActionAssign").value = formData.assign;
+        dojo.byId("wfActionComments").value = formData.comments;
+        dojo.byId("wfActionId").value = actionId;
+
+        // BEGIN: PUSH PUBLISHING ACTIONLET
+        dojo.byId("wfPublishDate").value = formData.publishDate;
+        dojo.byId("wfPublishTime").value = formData.publishTime;
+        dojo.byId("wfExpireDate").value = formData.expireDate;
+        dojo.byId("wfExpireTime").value = formData.expireTime;
+        dojo.byId("wfWhereToSend").value = formData.whereToSend;
+        dojo.byId("wfiWantTo").value = formData.iWantTo;
+        dojo.byId("wfFilterKey").value = formData.filterKey;
+        // END: PUSH PUBLISHING ACTIONLET
+
+        saveContent(false);
+    }
+
 
     function saveAssignCallBack(actionId, formData) {
-
         var pushPublish = formData.pushPublish;
         var assignComment = formData.assignComment;
 

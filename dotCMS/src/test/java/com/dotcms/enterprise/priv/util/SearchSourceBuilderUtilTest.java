@@ -1,11 +1,12 @@
 package com.dotcms.enterprise.priv.util;
 
+import com.dotcms.UnitTestBase;
 import java.io.IOException;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
 import org.junit.Assert;
 import org.junit.Test;
 
-public class SearchSourceBuilderUtilTest {
+public class SearchSourceBuilderUtilTest extends UnitTestBase {
 
 
     @Test
@@ -20,7 +21,8 @@ public class SearchSourceBuilderUtilTest {
         Assert.assertNotNull(builder);
         Assert.assertTrue(builder.aggregations().getAggregatorFactories().size() == 1);
         Assert.assertTrue(
-                builder.aggregations().getAggregatorFactories().get(0).getName().equals("entries"));
+                builder.aggregations().getAggregatorFactories().iterator().next()
+                        .getName().equals("entries"));
     }
 
 }

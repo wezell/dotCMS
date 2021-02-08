@@ -6,11 +6,15 @@ bin/*.sh
 .settings/*
 .project
 .idea/
+.vscode
 *.iml
 *.ipr
 *.iws
 
-
+# none enterprise stuff should make it here #
+#######################################
+dotCMS/src/main/enterprise
+dotCMS/src/main/enterprise/*
 
 #Temporary Build Migration Ignores
 dotCMS/src/main/webapp/html/ng
@@ -41,10 +45,12 @@ dotCMS/src/main/webapp/WEB-INF/lib/*.jar
 dotCMS/src/main/webapp/WEB-INF/felix/bundle/dot.*.jar
 dotCMS/src/main/webapp/WEB-INF/lib/plugin-*.jar
 dotCMS/starter.zip
+dotCMS/src/integration-test/resources/starter.zip
 .ant-targets-build.xml
 .gradle/
 /*.local.*
 dotCMS/src/main/webapp/dotAdmin
+dotCMS/src/main/webapp/dotcms-webcomponents
 dotCMS/bin/*
 dotCMS/classes
 
@@ -63,3 +69,12 @@ dotCMS/src/main/webapp/html/plugins/
 # immutables.github.io generated folder#
 ###############################
 dotCMS/src/main/generated/
+
+# integration tests reports and logs
+###############################
+docker/tests/integration/output
+docker/tests/integration/license
+docker/tests/integration/backup
+
+dot-cicd/
+tmp/

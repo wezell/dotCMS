@@ -1,6 +1,8 @@
 package com.dotcms.rendering.velocity.servlet;
 
+import com.dotcms.api.web.HttpServletRequestThreadLocal;
 import com.dotcms.enterprise.LicenseUtil;
+import com.dotcms.rendering.velocity.services.VelocityResourceKey;
 import com.dotcms.rendering.velocity.util.VelocityUtil;
 import com.dotcms.visitor.domain.Visitor;
 import com.dotmarketing.beans.Host;
@@ -15,12 +17,14 @@ import com.dotmarketing.exception.DotDataException;
 import com.dotmarketing.exception.DotSecurityException;
 import com.dotmarketing.factories.ClickstreamFactory;
 import com.dotmarketing.filters.CMSUrlUtil;
+import com.dotmarketing.portlets.htmlpageasset.model.HTMLPageAsset;
 import com.dotmarketing.portlets.htmlpageasset.model.IHTMLPage;
 import com.dotmarketing.portlets.rules.business.RulesEngine;
 import com.dotmarketing.portlets.rules.model.Rule;
 import com.dotmarketing.util.Config;
 import com.dotmarketing.util.Logger;
 import com.dotmarketing.util.PageMode;
+import com.dotmarketing.util.UtilMethods;
 import com.dotmarketing.util.WebKeys;
 import com.liferay.portal.model.User;
 import org.apache.velocity.context.Context;
@@ -33,27 +37,25 @@ import java.util.Optional;
 
 public class VelocityLiveMode extends VelocityModeHandler {
 
-
-
-    private final HttpServletRequest request;
-    private final HttpServletResponse response;
-    private static final PageMode mode = PageMode.LIVE;
-    private final String uri;
-    private final Host host;
-
-
-
-    public VelocityLiveMode(HttpServletRequest request, HttpServletResponse response, String uri, Host host) {
-        this.request = request;
-        this.response = response;
-        this.uri = uri;
-        this.host = host;
+    @Deprecated
+    public VelocityLiveMode(final HttpServletRequest request, final HttpServletResponse response, final String uri, final Host host) {
+        this(
+                request,
+                response,
+                VelocityModeHandler.getHtmlPageFromURI(PageMode.get(request), request, uri, host),
+                host
+        );
     }
 
-    public VelocityLiveMode(HttpServletRequest request, HttpServletResponse response) {
-        this(request, response, request.getRequestURI(), hostWebAPI.getCurrentHostNoThrow(request));
-    }
+    protected VelocityLiveMode(
+            final HttpServletRequest request,
+            final HttpServletResponse response,
+            final IHTMLPage htmlPage,
+            final Host host) {
 
+        super(request, response, htmlPage, host);
+        this.setMode(PageMode.LIVE);
+    }
 
     @Override
     public final void serve() throws DotDataException, IOException, DotSecurityException {
@@ -71,7 +73,7 @@ public class VelocityLiveMode extends VelocityModeHandler {
 
 
             // now we check identifier cache first (which DOES NOT have a 404 cache )
-            Identifier id = APILocator.getIdentifierAPI().find(host, uri);
+            final Identifier id = APILocator.getIdentifierAPI().find(this.htmlPage.getIdentifier());
             if (!host.isLive() || id == null || id.getId() == null) {
                 response.sendError(HttpServletResponse.SC_NOT_FOUND);
                 return;
@@ -95,17 +97,11 @@ public class VelocityLiveMode extends VelocityModeHandler {
 
 
             User user = getUser();
-
+            final String uri = CMSUrlUtil.getCurrentURI(request);
             Logger.debug(this.getClass(), "Page Permissions for URI=" + uri);
 
-
-
-            IHTMLPage htmlPage = APILocator.getHTMLPageAssetAPI().findByIdLanguageFallback(id, langId, mode.showLive,
-                    APILocator.systemUser(), mode.respectAnonPerms);
-
-
             // Verify and handle the case for unauthorized access of this contentlet
-            Boolean unauthorized = CMSUrlUtil.getInstance().isUnauthorizedAndHandleError(htmlPage, uri, user, request, response);
+            boolean unauthorized = CMSUrlUtil.getInstance().isUnauthorizedAndHandleError(htmlPage, uri, user, request, response);
             if (unauthorized) {
                 return;
             }
@@ -116,14 +112,19 @@ public class VelocityLiveMode extends VelocityModeHandler {
             Logger.debug(this.getClass(), "Recording the ClickStream");
             if (Config.getBooleanProperty("ENABLE_CLICKSTREAM_TRACKING", false)) {
                 if (user != null) {
-                    UserProxy userProxy = com.dotmarketing.business.APILocator.getUserProxyAPI().getUserProxy(user,
-                            APILocator.getUserAPI().getSystemUser(), false);
-                    if (!userProxy.isNoclicktracking()) {
+
                         ClickstreamFactory.addRequest((HttpServletRequest) request, ((HttpServletResponse) response), host);
-                    }
+                    
                 } else {
                     ClickstreamFactory.addRequest((HttpServletRequest) request, ((HttpServletResponse) response), host);
                 }
+            }
+
+            //Validate if template is publish, if not remove page from cache
+            if (!UtilMethods.isSet(APILocator.getTemplateAPI().findLiveTemplate(htmlPage.getTemplateId(),APILocator.systemUser(),false).getInode())) {
+                CacheLocator.getVeloctyResourceCache()
+                        .remove(new VelocityResourceKey((HTMLPageAsset) htmlPage, PageMode.LIVE,
+                                htmlPage.getLanguageId()));
             }
 
             // Begin page caching
@@ -153,6 +154,7 @@ public class VelocityLiveMode extends VelocityModeHandler {
 
             try (Writer tmpOut = (key != null) ? new StringWriter(4096) : new BufferedWriter(new OutputStreamWriter(out))) {
 
+                HttpServletRequestThreadLocal.INSTANCE.setRequest(request);
                 this.getTemplate(htmlPage, mode).merge(context, tmpOut);
 
                 if (key != null) {

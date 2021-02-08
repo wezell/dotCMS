@@ -39,6 +39,7 @@ import com.dotmarketing.util.DateUtil;
 import com.dotmarketing.util.Logger;
 import com.dotmarketing.util.PaginatedArrayList;
 import com.dotmarketing.util.UtilMethods;
+import com.google.common.collect.ImmutableList;
 import com.liferay.portal.model.User;
 import org.apache.commons.lang.StringUtils;
 
@@ -84,8 +85,11 @@ public class HostAPIImpl implements HostAPI {
 
             APILocator.getPermissionAPI().checkPermission(host, PermissionLevel.READ, user);
             return host;
-        } catch (Exception e) {
 
+        } catch (DotSecurityException | DotDataException e) {
+            Logger.warn(HostAPIImpl.class, "Error trying to het default host:" + e.getMessage());
+            throw e;
+        } catch (Exception e) {
             throw new DotRuntimeException(e.getMessage(), e);
         }
         
@@ -106,37 +110,58 @@ public class HostAPIImpl implements HostAPI {
     @Override
     @CloseDBIfOpened
     public Host resolveHostName(String serverName, User user, boolean respectFrontendRoles) throws DotDataException, DotSecurityException {
+        Host host = hostCache.getHostByAlias(serverName);
+        User systemUser = APILocator.systemUser();
+
+        if(host == null){
+
+            try {
+                final Optional<Host> optional = resolveHostNameWithoutDefault(serverName, systemUser, respectFrontendRoles);
+                host = optional.isPresent() ? optional.get() : findDefaultHost(systemUser, respectFrontendRoles);
+            } catch (Exception e) {
+                host = findDefaultHost(systemUser, respectFrontendRoles);
+            }
+
+            if(host != null){
+                hostCache.addHostAlias(serverName, host);
+            }
+        }
+
+        checkHostPermission(user, respectFrontendRoles, host);
+        return host;
+    }
+
+    @Override
+    @CloseDBIfOpened
+    public Optional<Host> resolveHostNameWithoutDefault(String serverName, User user, boolean respectFrontendRoles) throws DotDataException, DotSecurityException {
 
         Host host = hostCache.getHostByAlias(serverName);
         User systemUser = APILocator.systemUser();
 
         if(host == null){
-            try {
-                host = findByNameNotDefault(serverName, systemUser, respectFrontendRoles);
-            } catch (Exception e) {
-                return findDefaultHost(systemUser, respectFrontendRoles);
-            }
-            
+            host = findByNameNotDefault(serverName, systemUser, respectFrontendRoles);
+
             if(host == null){
                 host = findByAlias(serverName, systemUser, respectFrontendRoles);
             }
-            
-            //If no host matches then we set the default host.
-            if(host == null){
-                host = findDefaultHost(systemUser, respectFrontendRoles);
-            }
-            
+
             if(host != null){
                 hostCache.addHostAlias(serverName, host);
             }
         }
-        
-        if(APILocator.getPermissionAPI().doesUserHavePermission(host, PermissionAPI.PERMISSION_READ, user, respectFrontendRoles)){
-            return host;
-        } else {
+
+        if (host != null) {
+            checkHostPermission(user, respectFrontendRoles, host);
+        }
+
+        return Optional.ofNullable(host);
+    }
+
+    private void checkHostPermission(User user, boolean respectFrontendRoles, Host host) throws DotDataException, DotSecurityException {
+        if (!APILocator.getPermissionAPI().doesUserHavePermission(host, PermissionAPI.PERMISSION_READ, user, respectFrontendRoles)) {
             String u = (user != null) ? user.getUserId() : null;
             String h = (host != null) ? host.getHostname() : null;
-            throw new DotSecurityException("User: " +  u + " does not have read permissions to " + h );
+            throw new DotSecurityException("User: " + u + " does not have read permissions to " + h);
         }
     }
 
@@ -230,6 +255,7 @@ public class HostAPIImpl implements HostAPI {
         Host host = null;
 
         try {
+
             StringBuilder queryBuffer = new StringBuilder();
             queryBuffer.append(String.format("%s:%s", CONTENT_TYPE_CONDITION, Host.HOST_VELOCITY_VAR_NAME ));
             queryBuffer.append(String.format(" +working:true +%s.aliases:%s", Host.HOST_VELOCITY_VAR_NAME, alias));
@@ -351,6 +377,17 @@ public class HostAPIImpl implements HostAPI {
         return hosts;
     }
 
+    @Override
+    public List<Host> findAllFromCache(final User user,
+            final boolean respectFrontendRoles) throws DotDataException, DotSecurityException {
+        Set<Host> cachedSites = hostCache.getAllSites();
+        if(null == cachedSites){
+            final List<Host> allFromDB = findAllFromDB(user, respectFrontendRoles);
+            hostCache.addAll(allFromDB);
+            cachedSites = hostCache.getAllSites();
+        }
+        return ImmutableList.copyOf(cachedSites);
+    }
 
     /**
      * @throws DotSecurityException
@@ -376,6 +413,7 @@ public class HostAPIImpl implements HostAPI {
         APILocator.getContentletAPI().copyProperties(contentletHost, host.getMap());
         contentletHost.setInode("");
         contentletHost.setIndexPolicy(host.getIndexPolicy());
+        contentletHost.setBoolProperty(Contentlet.DISABLE_WORKFLOW, true);
         contentletHost = APILocator.getContentletAPI().checkin(contentletHost, user, respectFrontendRoles);
 
         if(host.isWorking() || host.isLive()){
@@ -638,7 +676,7 @@ public class HostAPIImpl implements HostAPI {
 
                 // Remove Templates
                 TemplateAPI templateAPI = APILocator.getTemplateAPI();
-                List<Template> templates = templateAPI.findTemplates(user, true, null, host.getIdentifier(), null, null, null, 0, -1, null);
+                List<Template> templates = templateAPI.findTemplatesAssignedTo(host, true);
                 for (Template template : templates) {
                     dc.setSQL("delete from template_containers where template_id = ?");
                     dc.addParam(template.getIdentifier());
@@ -720,6 +758,12 @@ public class HostAPIImpl implements HostAPI {
                 // Remove Host
                 Contentlet c = contentAPI.find(host.getInode(), user, respectFrontendRoles);
                 contentAPI.delete(c, user, respectFrontendRoles);
+
+                try {
+                    APILocator.getAppsAPI().removeSecretsForSite(host, APILocator.systemUser());
+                }catch (Exception e){
+                    Logger.error(HostAPIImpl.class, "Error removing secrets for site",  e);
+                }
                 hostCache.remove(host);
                 hostCache.clearAliasCache();
             }
@@ -937,8 +981,10 @@ public class HostAPIImpl implements HostAPI {
         if(host != null){
             hostCache.remove(host);
         }
-        Contentlet c = APILocator.getContentletAPI().find(host.getInode(), user, respectFrontendRoles);
-        APILocator.getContentletAPI().publish(c, user, respectFrontendRoles);
+
+        final Contentlet contentletHost = APILocator.getContentletAPI().find(host.getInode(), user, respectFrontendRoles);
+        contentletHost.setBoolProperty(Contentlet.DISABLE_WORKFLOW, true);
+        APILocator.getContentletAPI().publish(contentletHost, user, respectFrontendRoles);
         hostCache.add(host);
         hostCache.clearAliasCache();
 
@@ -971,14 +1017,13 @@ public class HostAPIImpl implements HostAPI {
 
         Host host = null;
 
-        final ContentletVersionInfo vinfo = HibernateUtil.load(ContentletVersionInfo.class,
-                "from "+ContentletVersionInfo.class.getName()+" where identifier=?", id);
+        final Optional<ContentletVersionInfo> vinfo = APILocator.getVersionableAPI().getContentletVersionInfo(id, APILocator.getLanguageAPI()
+                .getDefaultLanguage().getId());
 
-        if(vinfo!=null && UtilMethods.isSet(vinfo.getIdentifier())) {
-
+        if(vinfo.isPresent()) {
             User systemUser = APILocator.systemUser();
 
-            String hostInode=vinfo.getWorkingInode();
+            String hostInode=vinfo.get().getWorkingInode();
             final Contentlet cont= APILocator.getContentletAPI().find(hostInode, systemUser, respectFrontendRoles);
             final ContentType type =APILocator.getContentTypeAPI(systemUser, respectFrontendRoles).find(Host.HOST_VELOCITY_VAR_NAME);
             if(cont.getStructureInode().equals(type.inode())) {

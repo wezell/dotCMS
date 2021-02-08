@@ -2,9 +2,15 @@ package com.dotmarketing.portlets.files.action;
 
 import static com.dotmarketing.business.PermissionAPI.PERMISSION_CAN_ADD_CHILDREN;
 
+import com.dotcms.api.system.event.message.MessageSeverity;
+import com.dotcms.api.system.event.message.MessageType;
+import com.dotcms.api.system.event.message.SystemMessageEventUtil;
+import com.dotcms.api.system.event.message.builder.SystemMessageBuilder;
 import com.dotcms.repackage.javax.portlet.ActionRequest;
 import com.dotcms.repackage.javax.portlet.ActionResponse;
 import com.dotcms.repackage.javax.portlet.PortletConfig;
+import com.dotcms.repackage.org.apache.struts.action.ActionForm;
+import com.dotcms.repackage.org.apache.struts.action.ActionMapping;
 import com.dotcms.util.exceptions.DuplicateFileException;
 import com.dotmarketing.beans.Host;
 import com.dotmarketing.beans.Identifier;
@@ -27,6 +33,7 @@ import com.dotmarketing.util.InodeUtils;
 import com.dotmarketing.util.Logger;
 import com.dotmarketing.util.UtilMethods;
 import com.dotmarketing.util.WebKeys;
+import com.google.common.collect.ImmutableList;
 import com.liferay.portal.language.LanguageException;
 import com.liferay.portal.language.LanguageUtil;
 import com.liferay.portal.model.User;
@@ -47,8 +54,6 @@ import java.util.List;
 import java.util.UUID;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpSession;
-import org.apache.struts.action.ActionForm;
-import org.apache.struts.action.ActionMapping;
 
 /**
  * @author Maria
@@ -238,7 +243,7 @@ public class UploadMultipleFilesAction extends DotPortletAction {
 
 				if(!APILocator.getFolderAPI().matchFilter(folder,fileName))
 	            {
-				   customMessage += fileName + ", ";
+				   customMessage += "<strong>" + fileName + "</strong>, ";
 	               filterError = true;
 	               continue;
 	            }
@@ -336,7 +341,13 @@ public class UploadMultipleFilesAction extends DotPortletAction {
 		if(filterError)
 		{
 			customMessage = customMessage.substring(0,customMessage.lastIndexOf(","));
-			SessionMessages.add(req, "custommessage",customMessage);
+			Logger.error(this, customMessage);
+			final SystemMessageBuilder message = new SystemMessageBuilder()
+					.setMessage(customMessage)
+					.setSeverity(MessageSeverity.ERROR)
+					.setType(MessageType.SIMPLE_MESSAGE)
+					.setLife(3000);
+			SystemMessageEventUtil.getInstance().pushMessage(message.create(), ImmutableList.of(user.getUserId()));
 		}
 	}
 }

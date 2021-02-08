@@ -17,6 +17,7 @@
 <%@ page import="com.dotmarketing.portlets.containers.model.Container"%>
 
 <%@ page import="com.dotmarketing.portlets.contentlet.business.HostAPI"%>
+<%@ page import="com.dotcms.rendering.velocity.viewtools.DotTemplateTool" %>
 <%@ include file="/html/js/template/utility-left-menu.jsp" %>
 <style type="text/css">
 	@import url(/html/css/template/draw-template.css);
@@ -42,7 +43,7 @@
 		template = (com.dotmarketing.portlets.templates.model.Template) request.getAttribute(com.dotmarketing.util.WebKeys.TEMPLATE_EDIT);
 	}
 	else {
-		template = (com.dotmarketing.portlets.templates.model.Template) com.dotmarketing.factories.InodeFactory.getInode(request.getParameter("inode"),com.dotmarketing.portlets.templates.model.Template.class);
+		template = APILocator.getTemplateAPI().find(request.getParameter("inode"),user,false);
 	}
 	List<Container> containersList = null;
 	StringBuilder containersStr = new StringBuilder();
@@ -338,9 +339,28 @@
 <script src="/html/js/cms_ui_utils.js" type="text/javascript"></script>
 <script src="/html/js/template/utility-add-head-code.js" type="text/javascript"></script>
 
+<%
+	final StringBuffer maxUUIDStr = new StringBuffer("{");
+	final Map<String, Long> maxUUID = DotTemplateTool.getMaxUUID(template);
+
+	for (Map.Entry<String, Long> maxUUIDEntry : maxUUID.entrySet()) {
+		maxUUIDStr.append("'" + maxUUIDEntry.getKey() + "'");
+		maxUUIDStr.append(":");
+		maxUUIDStr.append(maxUUIDEntry.getValue());
+		maxUUIDStr.append(",");
+	}
+
+	maxUUIDStr.append("}");
+%>
 <script type="text/javascript">
 	dojo.addOnLoad(function() {
-		drawDefault(<%=overrideBody%>,'<%=LanguageUtil.get(pageContext, "Add-Container")%>','<%=LanguageUtil.get(pageContext, "Remove-Container")%>','<%=containersStr.toString()%>',<%=containerSize%>);
+		drawDefault(
+				<%=overrideBody%>,
+				'<%=LanguageUtil.get(pageContext, "Add-Container")%>',
+				'<%=LanguageUtil.get(pageContext, "Remove-Container")%>',
+				'<%=containersStr.toString()%>',
+				<%=containerSize%>,
+				<%=maxUUIDStr.toString()%>);
 		//setTimeout('codeMirrorArea()',1);
 		//dojo.byId("titleField").focus(true);
 	});

@@ -1,9 +1,12 @@
 package com.dotmarketing.factories;
 
 
+import com.dotcms.api.web.HttpServletRequestThreadLocal;
 import com.dotcms.business.CloseDBIfOpened;
 import com.dotcms.business.WrapInTransaction;
 import com.dotcms.contenttype.exception.NotFoundInDbException;
+import com.dotcms.enterprise.achecker.utility.Utility;
+import com.dotcms.rendering.velocity.directive.ParseContainer;
 import com.dotcms.rendering.velocity.services.PageLoader;
 import com.dotcms.rendering.velocity.viewtools.DotTemplateTool;
 import com.dotcms.util.transform.TransformerLocator;
@@ -15,6 +18,9 @@ import com.dotmarketing.business.CacheLocator;
 import com.dotmarketing.business.DotStateException;
 import com.dotmarketing.common.db.DotConnect;
 import com.dotmarketing.common.db.Params;
+import com.dotmarketing.db.DbConnectionFactory;
+import com.dotmarketing.db.DbConnectionUtil;
+import com.dotmarketing.db.HibernateUtil;
 import com.dotmarketing.exception.DotDataException;
 import com.dotmarketing.exception.DotRuntimeException;
 import com.dotmarketing.exception.DotSecurityException;
@@ -28,6 +34,7 @@ import com.dotmarketing.portlets.contentlet.business.ContentletAPI;
 import com.dotmarketing.portlets.contentlet.business.DotContentletStateException;
 import com.dotmarketing.portlets.contentlet.model.Contentlet;
 import com.dotmarketing.portlets.contentlet.model.ContentletVersionInfo;
+import com.dotmarketing.portlets.htmlpageasset.model.HTMLPageAsset;
 import com.dotmarketing.portlets.htmlpageasset.model.IHTMLPage;
 import com.dotmarketing.portlets.templates.design.bean.ContainerUUID;
 import com.dotmarketing.portlets.templates.design.bean.TemplateLayout;
@@ -35,6 +42,7 @@ import com.dotmarketing.portlets.templates.model.Template;
 import com.dotmarketing.util.Logger;
 import com.dotmarketing.util.PageMode;
 import com.dotmarketing.util.UtilMethods;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.collect.HashBasedTable;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
@@ -42,6 +50,8 @@ import com.google.common.collect.Table;
 import com.liferay.portal.model.User;
 import com.liferay.util.StringPool;
 import com.rainerhahnekamp.sneakythrow.Sneaky;
+import io.vavr.control.Try;
+import org.apache.bcel.generic.NEW;
 import org.apache.commons.lang.StringUtils;
 
 import java.sql.SQLException;
@@ -72,6 +82,15 @@ public class MultiTreeAPIImpl implements MultiTreeAPI {
     private static final String DELETE_SQL_PERSONALIZATION_PER_PAGE = "delete from multi_tree where parent1=? and personalization = ?";
     private static final String DELETE_ALL_MULTI_TREE_SQL = "delete from multi_tree where parent1=? AND relation_type != ?";
     private static final String DELETE_ALL_MULTI_TREE_SQL_BY_RELATION_AND_PERSONALIZATION = "delete from multi_tree where parent1=? AND relation_type != ? and personalization = ?";
+    private static final String DELETE_ALL_MULTI_TREE_SQL_BY_RELATION_AND_PERSONALIZATION_PER_LANGUAGE_NOT_SQL =
+            "delete from multi_tree where relation_type != ? and personalization = ? and multi_tree.parent1 = ?  and " +
+                    "child in (select distinct identifier from contentlet,multi_tree where multi_tree.child = contentlet.identifier and multi_tree.parent1 = ? and language_id = ?)";
+
+    private static final String DELETE_ALL_MULTI_TREE_SQL_BY_RELATION_AND_PERSONALIZATION_PER_LANGUAGE_SQL =
+            "delete from multi_tree where relation_type != ? and personalization = ? and multi_tree.parent1 = ?  and child in (%s)";
+    private static final String SELECT_MULTI_TREE_BY_LANG =
+            "select distinct contentlet.identifier from contentlet,multi_tree where multi_tree.child = contentlet.identifier and multi_tree.parent1 = ? and language_id = ?";
+
     private static final String UPDATE_MULTI_TREE_PERSONALIZATION = "update multi_tree set personalization = ? where personalization = ?";
     private static final String SELECT_SQL = "select * from multi_tree where parent1 = ? and parent2 = ? and child = ? and  relation_type = ? and personalization = ?";
 
@@ -224,24 +243,28 @@ public class MultiTreeAPIImpl implements MultiTreeAPI {
         return TransformerLocator.createMultiTreeTransformer(db.loadObjectResults()).asList();
     }
 
-
     @CloseDBIfOpened
     @Override
-    public Set<String> getPersonalizationsForPage(final String pageId) throws DotDataException {
-
-        final Set<String> personalizationSet = new HashSet<>();
-        final  List<Map<String, Object>>  personalizationMaps =
-                 new DotConnect().setSQL(SELECT_UNIQUE_PERSONALIZATION_PER_PAGE).addParam(pageId).loadObjectResults();
-
-        for (final Map<String, Object> personalizationMap : personalizationMaps) {
-
-            personalizationSet.add(personalizationMap.values()
-                    .stream().findFirst().orElse(StringPool.BLANK).toString());
-        }
-
-        return personalizationSet;
+    public Set<String> getPersonalizationsForPage(final String pageID) throws DotDataException {
+        IHTMLPage pageId=APILocator.getHTMLPageAssetAPI().fromContentlet(APILocator.getContentletAPI().findContentletByIdentifierAnyLanguage(pageID));
+        return getPersonalizationsForPage(pageId);
     }
+    
+    @CloseDBIfOpened
+    @Override
+    public Set<String> getPersonalizationsForPage(final IHTMLPage page) throws DotDataException {
+        final Set<String> personas=new HashSet<>();
 
+        final Table<String, String, Set<PersonalizedContentlet>> pageContents = Try.of(()-> getPageMultiTrees(page, false)).getOrElseThrow(e->new DotRuntimeException(e));
+
+        for (final String containerId : pageContents.rowKeySet()) {
+            for (final String uniqueId : pageContents.row(containerId).keySet()) {
+                pageContents.get(containerId, uniqueId).forEach(p->personas.add(p.getPersonalization()));
+            }
+        }
+        return personas;
+    }
+    
     @CloseDBIfOpened
     @Override
     public Set<String> getPersonalizations () throws DotDataException {
@@ -452,7 +475,7 @@ public class MultiTreeAPIImpl implements MultiTreeAPI {
     @Override
     @WrapInTransaction
     public void saveMultiTree(final MultiTree mTree) throws DotDataException {
-        Logger.info(this, String.format("Saving MutiTree: %s", mTree));
+        Logger.debug(this, () -> String.format("Saving MutiTree: %s", mTree));
         _reorder(mTree);
         updateHTMLPageVersionTS(mTree.getHtmlPage());
         refreshPageInCache(mTree.getHtmlPage());
@@ -500,8 +523,30 @@ public class MultiTreeAPIImpl implements MultiTreeAPI {
     @Override
     @WrapInTransaction
     public void overridesMultitreesByPersonalization(final String pageId,
+                                                     final String personalization,
+                                                     final List<MultiTree> multiTrees) throws DotDataException {
+
+        this.overridesMultitreesByPersonalization(pageId, personalization, multiTrees,
+                Optional.empty());  // no lang passed, will deletes everything
+    }
+
+    /**
+     * Save a collection of {@link MultiTree} and link them with a page, Also delete all the
+     * {@link MultiTree} linked previously with the page.
+     *
+     * @param pageId {@link String} Page's identifier
+     * @param personalization {@link String} personalization token
+     * @param multiTrees {@link List} of {@link MultiTree} to safe
+     * @param languageIdOpt {@link Optional} {@link Long}   optional language, if present will deletes only the contentlets that have a version on this language.
+     *                                        Since it is by identifier, when deleting for instance in spanish, will remove the english and any other lang version too.
+     * @throws DotDataException 
+     */
+    @Override
+    @WrapInTransaction
+    public void overridesMultitreesByPersonalization(final String pageId,
                                                     final String personalization,
-                                                    final List<MultiTree> multiTrees) throws DotDataException {
+                                                    final List<MultiTree> multiTrees,
+                                                     final Optional<Long> languageIdOpt) throws DotDataException {
 
         Logger.info(this, String.format(
                 "Overriding MutiTrees: pageId -> %s personalization -> %s multiTrees-> %s ",
@@ -515,10 +560,25 @@ public class MultiTreeAPIImpl implements MultiTreeAPI {
         Logger.debug(MultiTreeAPIImpl.class, ()->String.format("Saving page's content: %s", multiTrees));
 
         final DotConnect db = new DotConnect();
-        db.setSQL(DELETE_ALL_MULTI_TREE_SQL_BY_RELATION_AND_PERSONALIZATION)
-                .addParam(pageId)
-                .addParam(ContainerUUID.UUID_DEFAULT_VALUE)
-                .addParam(personalization).loadResult();
+        if (languageIdOpt.isPresent()) {
+            if (DbConnectionFactory.isMySql()) {
+                deleteMultiTreeToMySQL(pageId, personalization, languageIdOpt);
+           } else {
+                db.setSQL(DELETE_ALL_MULTI_TREE_SQL_BY_RELATION_AND_PERSONALIZATION_PER_LANGUAGE_NOT_SQL)
+                        .addParam(ContainerUUID.UUID_DEFAULT_VALUE)
+                        .addParam(personalization)
+                        .addParam(pageId)
+                        .addParam(pageId)
+                        .addParam(languageIdOpt.get())
+                        .loadResult();
+            }
+        } else {
+
+            db.setSQL(DELETE_ALL_MULTI_TREE_SQL_BY_RELATION_AND_PERSONALIZATION)
+                    .addParam(pageId)
+                    .addParam(ContainerUUID.UUID_DEFAULT_VALUE)
+                    .addParam(personalization).loadResult();
+        }
 
         if (!multiTrees.isEmpty()) {
 
@@ -539,16 +599,56 @@ public class MultiTreeAPIImpl implements MultiTreeAPI {
         refreshPageInCache(pageId);
     }
 
+    private void deleteMultiTreeToMySQL(
+            final String pageId,
+            final String personalization,
+            final Optional<Long> languageIdOpt) throws DotDataException {
+        final DotConnect db = new DotConnect();
+
+        final List<String> multiTreesId = db.setSQL(SELECT_MULTI_TREE_BY_LANG)
+            .addParam(pageId)
+            .addParam(languageIdOpt.get())
+            .loadObjectResults()
+            .stream()
+            .map(map -> String.format("'%s'", map.get("identifier")))
+            .collect(Collectors.toList());
+
+        if (!multiTreesId.isEmpty()) {
+
+            db.setSQL(String.format(DELETE_ALL_MULTI_TREE_SQL_BY_RELATION_AND_PERSONALIZATION_PER_LANGUAGE_SQL, Utility.joinList(",", multiTreesId)))
+                    .addParam(ContainerUUID.UUID_DEFAULT_VALUE)
+                    .addParam(personalization)
+                    .addParam(pageId)
+                    .loadResult();
+        }
+    }
+
     @Override
     @WrapInTransaction
     public void updatePersonalization(final String currentPersonalization, final String newPersonalization) throws DotDataException {
 
         Logger.info(this, "Updating the personalization: " + currentPersonalization +
                                         " to " + newPersonalization);
+        final List<Map<String, Object>> currentPersonalizationPages =
+                new DotConnect().setSQL("select parent1 from multi_tree where personalization = ?")
+                .addObject(currentPersonalization).loadObjectResults();
 
         new DotConnect().setSQL(UPDATE_MULTI_TREE_PERSONALIZATION)
                 .addParam(newPersonalization)
                 .addParam(currentPersonalization).loadResult();
+
+        if (UtilMethods.isSet(currentPersonalizationPages)) {
+
+            Logger.info(this, "The personalization: " + currentPersonalization + ", has been changed to : " + newPersonalization +
+                    " all related pages multitrees will be invalidated: " + currentPersonalizationPages.size());
+            for (final Map<String, Object> pageMap : currentPersonalizationPages) {
+
+                final String pageId = (String) pageMap.get("parent1");
+                Logger.info(this, "Invalidating the multitrees for the page: " + pageId);
+                CacheLocator.getMultiTreeCache()
+                        .removePageMultiTrees(pageId);
+            }
+        }
     }
 
     /**
@@ -562,7 +662,8 @@ public class MultiTreeAPIImpl implements MultiTreeAPI {
     @Override
     @WrapInTransaction
     public void saveMultiTrees(final String pageId, final List<MultiTree> mTrees) throws DotDataException {
-        Logger.info(this, String.format("Saving MutiTrees: pageId -> %s multiTrees-> %s", pageId, mTrees));
+        Logger.debug(this, () -> String
+                .format("Saving MutiTrees: pageId -> %s multiTrees-> %s", pageId, mTrees));
         if (mTrees == null) {
             throw new DotDataException("empty list passed in");
         }
@@ -622,7 +723,7 @@ public class MultiTreeAPIImpl implements MultiTreeAPI {
 
     private void _dbInsert(final MultiTree multiTree) throws DotDataException {
 
-        Logger.info(this, String.format("_dbInsert -> Saving MutiTree: %s", multiTree));
+        Logger.debug(this, () -> String.format("_dbInsert -> Saving MutiTree: %s", multiTree));
 
         new DotConnect().setSQL(INSERT_SQL).addParam(multiTree.getHtmlPage()).addParam(multiTree.getContainerAsID()).addParam(multiTree.getContentlet())
                 .addParam(multiTree.getRelationType()).addParam(multiTree.getTreeOrder()).addObject(multiTree.getPersonalization()).loadResult();
@@ -761,7 +862,7 @@ public class MultiTreeAPIImpl implements MultiTreeAPI {
             Contentlet contentlet = null;
             try {
                 contentlet = contentletAPI.findContentletByIdentifierAnyLanguage(multiTree.getContentlet());
-            } catch (DotDataException | DotSecurityException | DotContentletStateException e) {
+            } catch (DotDataException  | DotContentletStateException e) {
                 Logger.debug(this.getClass(), "invalid contentlet on multitree:" + multiTree
                         + ", msg: " + e.getMessage(), e);
                 Logger.warn(this.getClass(), "invalid contentlet on multitree:" + multiTree);
@@ -773,7 +874,7 @@ public class MultiTreeAPIImpl implements MultiTreeAPI {
                         ? pageContents.get(containerId, multiTree.getRelationType())
                         : new LinkedHashSet<>();
 
-                if (container != null && myContents.size() < container.getMaxContentlets()) {
+                if (container != null) {
 
                     myContents.add(new PersonalizedContentlet(multiTree.getContentlet(), personalization));
                 }
@@ -788,6 +889,16 @@ public class MultiTreeAPIImpl implements MultiTreeAPI {
         return pageContents;
     }
 
+    /**
+     * Returns the list of Containers from the drawn layout of a given Template.
+     *
+     * @param page The {@link IHTMLPage} object using the {@link Template} which holds the Containers.
+     *
+     * @return The list of {@link ContainerUUID} objects.
+     *
+     * @throws DotSecurityException The internal APIs are not allowed to return data for the specified user.
+     * @throws DotDataException     The information for the Template could not be accessed.
+     */
     private List<ContainerUUID> getDrawedLayoutContainerUUIDs (final IHTMLPage page) throws DotSecurityException, DotDataException {
 
         final TemplateLayout layout =
@@ -795,6 +906,18 @@ public class MultiTreeAPIImpl implements MultiTreeAPI {
         return APILocator.getTemplateAPI().getContainersUUID(layout);
     }
 
+    /**
+     * Traverses the {@link Template} from an HTML Page and retrieves the Containers that are currently empty, i.e.,
+     * Containers that have no content in them.
+     *
+     * @param page         The {@link IHTMLPage} object that will be inspected.
+     * @param pageContents The parts that make up the {@link IHTMLPage} object.
+     * @param liveMode     If set to {@code true}, only the live version of the Containers will be retrieved. If set to
+     *                     {@code} false, only the working version will be retrieved.
+     *
+     * @throws DotDataException     An error occurred qhen retrieving the required information from the data source.
+     * @throws DotSecurityException The internal APIs are not allowed to return data for the specified user.
+     */
     private void addEmptyContainers(final IHTMLPage page,
                                     final Table<String, String, Set<PersonalizedContentlet>> pageContents,
                                     final boolean liveMode)
@@ -809,8 +932,9 @@ public class MultiTreeAPIImpl implements MultiTreeAPI {
                 containersUUID = template.isDrawed()?
                         this.getDrawedLayoutContainerUUIDs(page):
                         APILocator.getTemplateAPI().getContainersUUIDFromDrawTemplateBody(template.getBody());
-            } catch (Exception e) {
-                Logger.error(this, e.getMessage(), e);
+            } catch (final Exception e) {
+                Logger.error(this, String.format("An error occurred when retrieving empty Containers from page with " +
+                        "ID '%s' in liveMode '%s': %s", page.getIdentifier(), liveMode, e.getMessage()), e);
                 return;
             }
 
@@ -818,14 +942,16 @@ public class MultiTreeAPIImpl implements MultiTreeAPI {
 
                 Container container = null;
                 try {
-                    // this read path or id.
-                    container = liveMode ? this.getLiveContainerById(containerUUID.getIdentifier(), APILocator.systemUser(), template):
-                            this.getWorkingContainerById(containerUUID.getIdentifier(), APILocator.systemUser(), template);
+
+                    final Optional<Container> optionalContainer =
+                            APILocator.getContainerAPI().findContainer(containerUUID.getIdentifier(), APILocator.systemUser(), liveMode, false);
+
+                    container = optionalContainer.isPresent() ? optionalContainer.get() : null;
 
                     if (container == null && !liveMode) {
                         continue;
                     }
-                } catch (NotFoundInDbException| DotRuntimeException e) {
+                } catch (final NotFoundInDbException| DotRuntimeException e) {
                     Logger.debug(this, e.getMessage(), e);
                     continue;
                 }
@@ -834,8 +960,9 @@ public class MultiTreeAPIImpl implements MultiTreeAPI {
                     pageContents.put(container.getIdentifier(), containerUUID.getUUID(), new LinkedHashSet<>());
                 }
             }
-        } catch (RuntimeException e) {
-            Logger.error(this, e.getMessage(), e);
+        } catch (final RuntimeException e) {
+            Logger.error(this, String.format("An error occurred when retrieving empty Containers from page with ID " +
+                    "'%s' in liveMode '%s': %s", page.getIdentifier(), liveMode, e.getMessage()), e);
         }
     }
 
@@ -848,12 +975,15 @@ public class MultiTreeAPIImpl implements MultiTreeAPI {
      * @param container container
      * @return true in case of the containerUUId is contains in pageContents
      */
-    private boolean doesPageContentsHaveContainer(
+    protected boolean doesPageContentsHaveContainer(
             final Table<String, String, Set<PersonalizedContentlet>> pageContents,
             final ContainerUUID containerUUID,
             final Container container) {
 
-        if(pageContents.contains(container.getIdentifier(), containerUUID.getUUID())){
+
+         if(pageContents.contains(container.getIdentifier(), containerUUID.getUUID())){
+            return true;
+        } else if(pageContents.contains(container.getIdentifier(), ParseContainer.PARSE_CONTAINER_UUID_PREFIX + containerUUID.getUUID())) {
             return true;
         } else if (ContainerUUID.UUID_LEGACY_VALUE.equals(containerUUID.getUUID())) {
             boolean pageContenstContains = pageContents.contains(containerUUID.getIdentifier(), ContainerUUID.UUID_START_VALUE);
@@ -866,34 +996,5 @@ public class MultiTreeAPIImpl implements MultiTreeAPI {
         } else {
             return false;
         }
-    }
-
-    private Container getLiveContainerById(final String containerIdOrPath, final User user, final Template template) throws NotFoundInDbException {
-
-        final LiveContainerFinderByIdOrPathStrategyResolver strategyResolver =
-                LiveContainerFinderByIdOrPathStrategyResolver.getInstance();
-        final Optional<ContainerFinderByIdOrPathStrategy> strategy           = strategyResolver.get(containerIdOrPath);
-
-        return this.geContainerById(containerIdOrPath, user, template, strategy, strategyResolver.getDefaultStrategy());
-    }
-
-    private Container getWorkingContainerById(final String containerIdOrPath, final User user, final Template template) throws NotFoundInDbException {
-
-        final WorkingContainerFinderByIdOrPathStrategyResolver strategyResolver =
-                WorkingContainerFinderByIdOrPathStrategyResolver.getInstance();
-        final Optional<ContainerFinderByIdOrPathStrategy> strategy           = strategyResolver.get(containerIdOrPath);
-
-        return this.geContainerById(containerIdOrPath, user, template, strategy, strategyResolver.getDefaultStrategy());
-    }
-
-    private Container geContainerById(final String containerIdOrPath, final User user, final Template template,
-                                      final Optional<ContainerFinderByIdOrPathStrategy> strategy,
-                                      final ContainerFinderByIdOrPathStrategy defaultContainerFinderByIdOrPathStrategy) throws NotFoundInDbException  {
-
-        final Supplier<Host> resourceHostSupplier = Sneaky.sneaked(()->APILocator.getTemplateAPI().getTemplateHost(template));
-
-        return strategy.isPresent()?
-                strategy.get().apply(containerIdOrPath, user, false, resourceHostSupplier):
-                defaultContainerFinderByIdOrPathStrategy.apply(containerIdOrPath, user, false, resourceHostSupplier);
     }
 }

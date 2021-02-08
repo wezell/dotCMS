@@ -6,7 +6,6 @@ import com.dotmarketing.exception.DotRuntimeException;
 import com.dotmarketing.util.Logger;
 import com.dotmarketing.util.json.JSONException;
 import com.dotmarketing.util.json.JSONObject;
-
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;

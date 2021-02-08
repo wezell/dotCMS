@@ -11,8 +11,8 @@
 	<div id="assetPermissionsMessageWrapper" display="none"></div>
 <!-- END Message -->
 
-<div id="assetPermissionsWrapper">
-<div style="padding-left:20px;padding-bottom:10px;white-space: nowrap;font-size:88%;" class="permissionType">
+<div id="assetPermissionsWrapper" style="display:none">
+<div style="padding-left:20px;padding-bottom:10px;font-size:88%;" class="permissionType">
 	<%if(asset instanceof Folder){%>
 		 <%= LanguageUtil.get(pageContext, "Folder") %>:  <b><%= APILocator.getIdentifierAPI().find((Folder) asset).getPath() %></b>
 	<%}else if(asset instanceof Host){%>
@@ -84,7 +84,6 @@
 	</div>
 
 	<div id="permissionsAccordionContainer" class="permissionWrapper"></div>
-	
 	<div id="noPermissionsMessage" class="noResultsMessage" style="display: none"><%= LanguageUtil.get(user, "No-permissions-message") %></div>
 	
 	<div class="clear"></div>

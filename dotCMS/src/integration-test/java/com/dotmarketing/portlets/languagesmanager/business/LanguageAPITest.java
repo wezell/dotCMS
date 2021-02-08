@@ -4,21 +4,14 @@ import static com.dotcms.integrationtestutil.content.ContentUtils.createTestKeyV
 import static com.dotcms.integrationtestutil.content.ContentUtils.deleteContentlets;
 import static org.junit.Assert.assertEquals;
 
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-
-import org.junit.Assert;
-import org.junit.BeforeClass;
-import org.junit.Test;
-import org.mockito.Mockito;
-
 import com.dotcms.contenttype.model.type.ContentType;
+import com.dotcms.datagen.ContentTypeDataGen;
 import com.dotcms.datagen.ContentletDataGen;
 import com.dotcms.languagevariable.business.LanguageVariableAPI;
 import com.dotcms.util.IntegrationTestInitService;
 import com.dotmarketing.business.APILocator;
 import com.dotmarketing.business.CacheLocator;
+import com.dotmarketing.business.DotStateException;
 import com.dotmarketing.portlets.contentlet.model.Contentlet;
 import com.dotmarketing.portlets.languagesmanager.model.Language;
 import com.dotmarketing.util.UUIDGenerator;
@@ -27,9 +20,26 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.liferay.portal.language.LanguageUtil;
 import com.liferay.portal.model.User;
+import com.rainerhahnekamp.sneakythrow.Sneaky;
+import com.tngtech.java.junit.dataprovider.DataProvider;
+import com.tngtech.java.junit.dataprovider.DataProviderRunner;
+import com.tngtech.java.junit.dataprovider.UseDataProvider;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import org.junit.Assert;
+import org.junit.BeforeClass;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.mockito.Mockito;
 
+@RunWith(DataProviderRunner.class)
 public class LanguageAPITest {
 	private static User systemUser;
+	
+	private static Language language;
+	
 	
 	@BeforeClass
     public static void prepare() throws Exception {
@@ -37,6 +47,9 @@ public class LanguageAPITest {
         IntegrationTestInitService.getInstance().init();
 
 		systemUser = APILocator.systemUser();
+		
+		language= new LanguageDataGen().nextPersisted();
+		
 	}
 
 	/*
@@ -48,33 +61,34 @@ public class LanguageAPITest {
 	 * 6- Clear cache
 	 * 
 	 */
-	@Test
-	public void languageCache() throws Exception{
+    @Test
+    public void languageCache() throws Exception {
 
-		int existingLanguagesCount = APILocator.getLanguageAPI().getLanguages().size();
-		APILocator.getLanguageAPI().getLanguages();
-		Assert.assertEquals(existingLanguagesCount,CacheLocator.getLanguageCache().getLanguages().size());
-		
-		Language lan = new Language();
-		lan.setCountry("Italy");
-		lan.setCountryCode("IT");
-		lan.setLanguageCode("it");
-		lan.setLanguage("Italian");
-		APILocator.getLanguageAPI().saveLanguage(lan);
-		lan = APILocator.getLanguageAPI().getLanguage("it", "IT");
-		
-		existingLanguagesCount = APILocator.getLanguageAPI().getLanguages().size();
-		CacheLocator.getLanguageCache().clearCache();
-		APILocator.getLanguageAPI().getLanguages();
-		Assert.assertEquals(existingLanguagesCount, CacheLocator.getLanguageCache().getLanguages().size());
-		
-		APILocator.getLanguageAPI().deleteLanguage(lan);
-		
-		existingLanguagesCount = APILocator.getLanguageAPI().getLanguages().size();
-		CacheLocator.getLanguageCache().clearCache();
-		APILocator.getLanguageAPI().getLanguages();
-		Assert.assertEquals(existingLanguagesCount,CacheLocator.getLanguageCache().getLanguages().size());		
-	}
+        int existingLanguagesCount = APILocator.getLanguageAPI().getLanguages().size();
+        APILocator.getLanguageAPI().getLanguages();
+        Assert.assertEquals(existingLanguagesCount, CacheLocator.getLanguageCache().getLanguages().size());
+
+
+
+        Language lan = new LanguageDataGen().nextPersisted();
+
+        existingLanguagesCount = APILocator.getLanguageAPI().getLanguages().size();
+        CacheLocator.getLanguageCache().clearCache();
+        APILocator.getLanguageAPI().getLanguages();
+        Assert.assertEquals(existingLanguagesCount, CacheLocator.getLanguageCache().getLanguages().size());
+
+        APILocator.getLanguageAPI().deleteLanguage(lan);
+        Assert.assertEquals(existingLanguagesCount - 1, APILocator.getLanguageAPI().getLanguages().size());
+        Assert.assertEquals(existingLanguagesCount - 1, CacheLocator.getLanguageCache().getLanguages().size());
+
+
+
+
+        existingLanguagesCount = APILocator.getLanguageAPI().getLanguages().size();
+        CacheLocator.getLanguageCache().clearCache();
+        APILocator.getLanguageAPI().getLanguages();
+        Assert.assertEquals(existingLanguagesCount, CacheLocator.getLanguageCache().getLanguages().size());
+    }
 
 	/**
 	 * This test is for a language key that exist as a content,
@@ -90,10 +104,10 @@ public class LanguageAPITest {
 			final ContentType languageVariableContentType = APILocator.getContentTypeAPI(systemUser)
 					.find(LanguageVariableAPI.LANGUAGEVARIABLE);
 			contentletEnglish = createTestKeyValueContent(
-					KEY_1, VALUE_1, 1,
+					KEY_1, VALUE_1, language.getId(),
 					languageVariableContentType, systemUser);
 
-			final String value = APILocator.getLanguageAPI().getStringKey(APILocator.getLanguageAPI().getDefaultLanguage(),KEY_1);
+			final String value = APILocator.getLanguageAPI().getStringKey(language,KEY_1);
 
 			Assert.assertEquals(VALUE_1,value);
 
@@ -119,7 +133,7 @@ public class LanguageAPITest {
 		try{
 
 			String value = APILocator.getLanguageAPI().getStringKey(APILocator.getLanguageAPI().getDefaultLanguage(),KEY_1);
-			Assert.assertEquals("email-address",value);
+			Assert.assertEquals("Email Address",value);
 
 			// Using the provided Language Variable Content Type
 			final ContentType languageVariableContentType = APILocator.getContentTypeAPI(systemUser)
@@ -127,7 +141,7 @@ public class LanguageAPITest {
 			contentletEnglish = createTestKeyValueContent(
 					KEY_1, VALUE_1, 1,
 					languageVariableContentType, systemUser);
-
+			CacheLocator.getESQueryCache().clearCache();
 			value = APILocator.getLanguageAPI().getStringKey(APILocator.getLanguageAPI().getDefaultLanguage(),KEY_1);
 
 			Assert.assertEquals(VALUE_1,value);
@@ -181,7 +195,7 @@ public class LanguageAPITest {
     
     
     // Add Languague Variable to local properties
-    lapi.saveLanguageKeys(language, ImmutableMap.of(PROPERTYFILE_KEY, PROPERTYFILE_KEY + "works"), ImmutableMap.of(), ImmutableSet.of());
+    lapi.saveLanguageKeys(language, ImmutableMap.of(PROPERTYFILE_KEY, PROPERTYFILE_KEY + "works"), new HashMap<>(), ImmutableSet.of());
     
 
     
@@ -202,11 +216,51 @@ public class LanguageAPITest {
     
     assertEquals(LanguageUtil.get( new Locale("en", "us"), SYSTEM_PROPERTYFILE_KEY ), translatedMap.get(SYSTEM_PROPERTYFILE_KEY) );
   }
-  
-	
-	
-	
-	
-	
-	
+
+	@DataProvider
+	public static Object[] dataProviderSaveLanguage() {
+
+		return new Language[]{
+				null,
+				new Language(0, "", null, null, null),
+				new Language(0, "it", null, null, null),
+				new Language(0, "", "IT", null, null),
+		};
+	}
+
+	@Test(expected = IllegalArgumentException.class)
+	@UseDataProvider("dataProviderSaveLanguage")
+	public void test_saveLanguage_InvalidLanguage_ShouldThrowException(final Language language) {
+  		APILocator.getLanguageAPI().saveLanguage(language);
+	}
+
+	@Test(expected = DotStateException.class)
+	public void test_deleteLanguage_WithExistingContent_ShouldFail() {
+		Language newLanguage = null;
+  		ContentType testType = null;
+  		try {
+			newLanguage = new LanguageDataGen().nextPersisted();
+			testType = new ContentTypeDataGen().nextPersisted();
+			// We don't care about the reference to the content since deleting the type will take care of it
+			new ContentletDataGen(testType.id())
+					.languageId(newLanguage.getId())
+					.nextPersisted();
+
+			APILocator.getLanguageAPI().deleteLanguage(newLanguage);
+		} finally {
+			// clean up
+			// new final var to be able to use Sneaky
+			final ContentType typeToDelete = testType;
+			if(testType!=null) {
+				Sneaky.sneaked(()->
+					APILocator.getContentTypeAPI(systemUser).delete(typeToDelete)
+				);
+			}
+
+			if(language!=null) {
+				APILocator.getLanguageAPI().deleteLanguage(newLanguage);
+			}
+		}
+	}
+
 }

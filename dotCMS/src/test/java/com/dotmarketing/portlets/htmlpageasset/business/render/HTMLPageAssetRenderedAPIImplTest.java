@@ -52,12 +52,9 @@ public class HTMLPageAssetRenderedAPIImplTest {
     private UserAPI userAPI;
     private final User systemUser = mock(User.class);
     private final HttpServletRequest request = mock(HttpServletRequest.class);
-    private final HttpServletResponse response = mock(HttpServletResponse.class);
     private final HostWebAPI hostWebAPI = mock(HostWebAPI.class);
     private final LanguageAPI languageAPI = mock(LanguageAPI.class);
     private final HTMLPageAssetAPI htmlPageAssetAPI = mock(HTMLPageAssetAPI.class);
-    private final VersionableAPI versionableAPI = mock(VersionableAPI.class);
-    private final HostAPI hostAPI = mock(HostAPI.class);
     private final HttpSession httpSession = mock(HttpSession.class);
     private HTMLPageAssetRenderedAPIImpl hTMLPageAssetRenderedAPIImpl;
     private final URLMapAPIImpl urlMapAPIImpl = mock(URLMapAPIImpl.class);
@@ -72,18 +69,14 @@ public class HTMLPageAssetRenderedAPIImplTest {
 
         when(request.getServerName()).thenReturn(CURRENT_HOST_NAME);
         when(request.getSession()).thenReturn(httpSession);
-
-        when(this.hostWebAPI.resolveHostName(CURRENT_HOST_NAME, systemUser, PageMode.PREVIEW_MODE.respectAnonPerms)).thenReturn(currentHost);
+        when(request.getSession(false)).thenReturn(httpSession);
 
         when(languageAPI.getDefaultLanguage()).thenReturn(DEFAULT_LANGUAGE);
-
         when(DEFAULT_LANGUAGE.getId()).thenReturn(1l);
 
-        when(httpSession.getAttribute( com.dotmarketing.util.WebKeys.CMS_SELECTED_HOST_ID )).thenReturn(null);
-
         hTMLPageAssetRenderedAPIImpl = new HTMLPageAssetRenderedAPIImpl(
-                permissionAPI, userAPI, hostWebAPI, languageAPI, htmlPageAssetAPI, versionableAPI,
-                hostAPI, urlMapAPIImpl, languageWebAPI);
+                permissionAPI, userAPI, hostWebAPI, languageAPI, htmlPageAssetAPI,
+                urlMapAPIImpl, languageWebAPI);
     }
 
     @Test
@@ -96,15 +89,11 @@ public class HTMLPageAssetRenderedAPIImplTest {
         final String pageUri = "/pageUri";
         final HTMLPageAsset htmlPage = mock(HTMLPageAsset.class);
 
-        final ContentletVersionInfo info = mock(ContentletVersionInfo.class);
-        when(info.getLockedBy()).thenReturn(null);
-
         when(htmlPage.getIdentifier()).thenReturn("1");
-        when(htmlPage.getLanguageId()).thenReturn(2l);
+        when(htmlPage.getLanguageId()).thenReturn(1l);
 
         when(htmlPageAssetAPI.getPageByPath(pageUri, currentHost, DEFAULT_LANGUAGE.getId(),
                 PageMode.PREVIEW_MODE.showLive)).thenReturn(htmlPage);
-        when(versionableAPI.getContentletVersionInfo(htmlPage.getIdentifier(), htmlPage.getLanguageId())).thenReturn(info);
 
         when(permissionAPI.doesUserHavePermission(htmlPage, PermissionLevel.READ.getType(), user,
                 false)).thenReturn(true);
@@ -112,13 +101,17 @@ public class HTMLPageAssetRenderedAPIImplTest {
         when(this.permissionAPI.doesUserHavePermission(htmlPage, PermissionLevel.READ.getType(), systemUser,
                 PageMode.PREVIEW_MODE.respectAnonPerms)).thenReturn(true);
 
+        when(this.hostWebAPI.getCurrentHost(request, systemUser)).thenReturn(currentHost);
+
+        when(languageWebAPI.getLanguage(request)).thenReturn(DEFAULT_LANGUAGE);
+
         final PageMode defaultEditPageMode =
                 hTMLPageAssetRenderedAPIImpl.getDefaultEditPageMode(user, request, pageUri);
 
         assertEquals(PageMode.PREVIEW_MODE,defaultEditPageMode);
     }
 
-    @Test
+    @Test()
     public void testShouldReturnADMINMODE_whenPageIsNotLockAndUserNotHaveReadPermission()
             throws DotSecurityException, DotDataException{
 
@@ -128,15 +121,11 @@ public class HTMLPageAssetRenderedAPIImplTest {
         final String pageUri = "/pageUri";
         final HTMLPageAsset htmlPage = mock(HTMLPageAsset.class);
 
-        final ContentletVersionInfo info = mock(ContentletVersionInfo.class);
-        when(info.getLockedBy()).thenReturn(null);
-
         when(htmlPage.getIdentifier()).thenReturn("1");
         when(htmlPage.getLanguageId()).thenReturn(2l);
 
         when(htmlPageAssetAPI.getPageByPath(pageUri, currentHost, DEFAULT_LANGUAGE.getId(),
                 PageMode.PREVIEW_MODE.showLive)).thenReturn(htmlPage);
-        when(versionableAPI.getContentletVersionInfo(htmlPage.getIdentifier(), htmlPage.getLanguageId())).thenReturn(info);
 
         when(permissionAPI.doesUserHavePermission(htmlPage, PermissionLevel.READ.getType(), user,
                 false)).thenReturn(false);
@@ -144,6 +133,11 @@ public class HTMLPageAssetRenderedAPIImplTest {
         when(this.permissionAPI.doesUserHavePermission(htmlPage, PermissionLevel.READ.getType(), systemUser,
                 PageMode.PREVIEW_MODE.respectAnonPerms)).thenReturn(true);
 
+        when(this.permissionAPI.doesUserHavePermission(currentHost, PermissionLevel.READ.getType(), user,
+                PageMode.PREVIEW_MODE.respectAnonPerms)).thenReturn(true);
+
+
+        when(this.hostWebAPI.getCurrentHost(request, systemUser)).thenReturn(currentHost);
         try {
             hTMLPageAssetRenderedAPIImpl.getDefaultEditPageMode(user, request, pageUri);
         } catch (final DotRuntimeException e) {
@@ -161,23 +155,24 @@ public class HTMLPageAssetRenderedAPIImplTest {
         final String pageUri = "/pageUri";
         final HTMLPageAsset htmlPage = mock(HTMLPageAsset.class);
 
-        final ContentletVersionInfo info = mock(ContentletVersionInfo.class);
-        when(info.getLockedBy()).thenReturn("user");
-
         when(htmlPage.getIdentifier()).thenReturn("1");
         when(htmlPage.getLanguageId()).thenReturn(2l);
 
         when(htmlPageAssetAPI.getPageByPath(pageUri, currentHost, DEFAULT_LANGUAGE.getId(),
                 PageMode.PREVIEW_MODE.showLive)).thenReturn(htmlPage);
-        when(versionableAPI.getContentletVersionInfo(htmlPage.getIdentifier(), htmlPage.getLanguageId())).thenReturn(info);
 
         when(this.permissionAPI.doesUserHavePermission(htmlPage, PermissionLevel.READ.getType(), user,
                 PageMode.PREVIEW_MODE.respectAnonPerms)).thenReturn(true);
 
+        when(this.permissionAPI.doesUserHavePermission(htmlPage, PermissionLevel.READ.getType(), systemUser,
+                PageMode.PREVIEW_MODE.respectAnonPerms)).thenReturn(true);
+
+        when(this.hostWebAPI.getCurrentHost(request, systemUser)).thenReturn(currentHost);
+
         final PageMode defaultEditPageMode =
                 hTMLPageAssetRenderedAPIImpl.getDefaultEditPageMode(user, request, pageUri);
 
-        assertEquals(PageMode.EDIT_MODE,defaultEditPageMode);
+        assertEquals(PageMode.PREVIEW_MODE,defaultEditPageMode);
     }
 
     @Test
@@ -196,16 +191,13 @@ public class HTMLPageAssetRenderedAPIImplTest {
 
         final String pageUri = "/pageUri";
 
-        final ContentletVersionInfo info = mock(ContentletVersionInfo.class);
-        when(info.getLockedBy()).thenReturn("user");
-
         when(htmlPage.getIdentifier()).thenReturn("1");
         when(htmlPage.getLanguageId()).thenReturn(2l);
 
         when(htmlPageAssetAPI.getPageByPath(pageUri, currentHost, DEFAULT_LANGUAGE.getId(),
                 PageMode.PREVIEW_MODE.showLive)).thenReturn(null);
 
-        when(htmlPageAssetAPI.getPageByPath("uri", currentHost, DEFAULT_LANGUAGE.getId(),
+        when(htmlPageAssetAPI.getPageByPath(pageUri, currentHost, DEFAULT_LANGUAGE.getId(),
                 PageMode.PREVIEW_MODE.showLive)).thenReturn(htmlPage);
 
         when(languageWebAPI.getLanguage(request)).thenReturn(language);
@@ -217,15 +209,17 @@ public class HTMLPageAssetRenderedAPIImplTest {
         when(contentlet.getInode()).thenReturn("inode");
         when(identifier.getURI()).thenReturn("uri");
 
-        when(versionableAPI.getContentletVersionInfo(htmlPage.getIdentifier(),
-                htmlPage.getLanguageId())).thenReturn(info);
-
         when(language.getId()).thenReturn(1l);
+
+        when(this.permissionAPI.doesUserHavePermission(htmlPage, PermissionLevel.READ.getType(), user,
+                PageMode.PREVIEW_MODE.respectAnonPerms)).thenReturn(true);
+        when(this.permissionAPI.doesUserHavePermission(htmlPage, PermissionLevel.READ.getType(), systemUser,
+                PageMode.PREVIEW_MODE.respectAnonPerms)).thenReturn(true);
 
         final UrlMapContext urlMapContext = UrlMapContextBuilder.builder()
                 .setMode(PageMode.PREVIEW_MODE)
                 .setUri(pageUri)
-                .setUser(user)
+                .setUser(systemUser)
                 .setHost(currentHost)
                 .setLanguageId(language.getId())
                 .build();
@@ -233,9 +227,41 @@ public class HTMLPageAssetRenderedAPIImplTest {
         when(urlMapAPIImpl.processURLMap(urlMapContext))
                 .thenReturn(Optional.of(urlMapInfo));
 
+        when(this.hostWebAPI.getCurrentHost(request, systemUser)).thenReturn(currentHost);
+
         final PageMode defaultEditPageMode =
                 hTMLPageAssetRenderedAPIImpl.getDefaultEditPageMode(user, request, pageUri);
 
-        assertEquals(PageMode.EDIT_MODE,defaultEditPageMode);
+        assertEquals(PageMode.PREVIEW_MODE, defaultEditPageMode);
+    }
+
+    @Test
+    public void testShouldReturnAdminMODE_whenUserDontHavePermission()
+            throws DotSecurityException, DotDataException{
+
+        final User user = mock(User.class);
+        when(user.getUserId()).thenReturn("user");
+
+        final String pageUri = "/pageUri";
+        final HTMLPageAsset htmlPage = mock(HTMLPageAsset.class);
+
+        when(htmlPage.getIdentifier()).thenReturn("1");
+        when(htmlPage.getLanguageId()).thenReturn(2l);
+
+        when(htmlPageAssetAPI.getPageByPath(pageUri, currentHost, DEFAULT_LANGUAGE.getId(),
+                PageMode.PREVIEW_MODE.showLive)).thenReturn(htmlPage);
+
+        when(this.permissionAPI.doesUserHavePermission(htmlPage, PermissionLevel.READ.getType(), user,
+                PageMode.PREVIEW_MODE.respectAnonPerms)).thenReturn(false);
+
+        when(this.permissionAPI.doesUserHavePermission(htmlPage, PermissionLevel.READ.getType(), systemUser,
+                PageMode.PREVIEW_MODE.respectAnonPerms)).thenReturn(true);
+
+        when(this.hostWebAPI.getCurrentHost(request, systemUser)).thenReturn(currentHost);
+
+        final PageMode defaultEditPageMode =
+                hTMLPageAssetRenderedAPIImpl.getDefaultEditPageMode(user, request, pageUri);
+
+        assertEquals(PageMode.ADMIN_MODE, defaultEditPageMode);
     }
 }

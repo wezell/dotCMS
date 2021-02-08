@@ -3,8 +3,36 @@ package com.dotmarketing.servlets;
 import static com.liferay.util.HttpHeaders.CACHE_CONTROL;
 import static com.liferay.util.HttpHeaders.EXPIRES;
 
+import com.liferay.portal.util.PortalUtil;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.RandomAccessFile;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.GregorianCalendar;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.TimeZone;
+
+import javax.imageio.ImageIO;
+import javax.imageio.spi.IIORegistry;
+import javax.servlet.ServletException;
+import javax.servlet.ServletOutputStream;
+import javax.servlet.http.HttpServlet;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import javax.servlet.http.HttpSession;
+
 import com.dotcms.contenttype.exception.NotFoundInDbException;
 import com.dotcms.contenttype.model.type.ContentType;
+import com.dotcms.rest.api.v1.DotObjectMapperProvider;
+import com.dotcms.rest.api.v1.temp.DotTempFile;
 import com.dotcms.rest.api.v1.temp.TempFileAPI;
 import com.dotcms.util.CloseUtils;
 import com.dotcms.util.DownloadUtil;
@@ -17,7 +45,6 @@ import com.dotmarketing.beans.Identifier;
 import com.dotmarketing.business.APILocator;
 import com.dotmarketing.business.web.UserWebAPI;
 import com.dotmarketing.business.web.WebAPILocator;
-import com.dotmarketing.cms.factories.PublicEncryptionFactory;
 import com.dotmarketing.db.DbConnectionFactory;
 import com.dotmarketing.exception.DotDataException;
 import com.dotmarketing.exception.DotRuntimeException;
@@ -38,32 +65,10 @@ import com.liferay.portal.PortalException;
 import com.liferay.portal.SystemException;
 import com.liferay.portal.model.User;
 import com.liferay.util.FileUtil;
-import java.io.File;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.RandomAccessFile;
-import java.text.SimpleDateFormat;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.Date;
-import java.util.GregorianCalendar;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.TimeZone;
-import javax.imageio.ImageIO;
-import javax.imageio.spi.IIORegistry;
-import javax.servlet.ServletException;
-import javax.servlet.ServletOutputStream;
-import javax.servlet.http.HttpServlet;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
-import javax.servlet.http.HttpSession;
+
+import eu.bitwalker.useragentutils.Browser;
+import eu.bitwalker.useragentutils.OperatingSystem;
+import eu.bitwalker.useragentutils.UserAgent;
 
 /**
  * This servlet allows you invoke content exporters over binary fields. With the following URL syntax you are able to
@@ -163,7 +168,7 @@ public class BinaryExporterServlet extends HttpServlet {
 		String exporterPath = uriPieces[1];
 		String uuid = uriPieces[2];
 
-		Map<String, String[]> params = new HashMap<>();
+		Map<String, String[]> params = new LinkedHashMap<>();
 		params.putAll(req.getParameterMap());
 		// only set uri params if they are not set in the query string - meaning
 		// the query string will override the uri params.
@@ -173,7 +178,7 @@ public class BinaryExporterServlet extends HttpServlet {
 				params.put(x, uriParams.get(x));
 			}
 		}
-		params = sortByKey(params);
+
 		boolean byInode = params.containsKey("byInode");
 
 		ServletOutputStream out = null;
@@ -232,12 +237,12 @@ public class BinaryExporterServlet extends HttpServlet {
 			boolean isTempBinaryImage = tempBinaryImageInodes.contains(assetInode);
 
 
-			User user = userWebAPI.getLoggedInUser(req);
+			final User user = PortalUtil.getUser(req);
 
-			PageMode mode = PageMode.get(req);
+			final PageMode mode = PageMode.get(req);
 
 			String downloadName = "file_asset";
-			long lang = WebAPILocator.getLanguageWebAPI().getLanguage(req).getId();
+			final long lang = WebAPILocator.getLanguageWebAPI().getLanguage(req).getId();
 
 
 			if (isContent){
@@ -252,16 +257,13 @@ public class BinaryExporterServlet extends HttpServlet {
 						} catch(DotSecurityException e) {
 							if (!mode.respectAnonPerms) {
 								content = getContentletLiveVersion(assetInode, user, lang);
+							} else {
+								throw e;
 							}
 						}
 					}
 				} else {
-				    boolean live=userWebAPI.isLoggedToFrontend(req);
-
-					//GIT-4506
-					if(WebAPILocator.getUserWebAPI().isLoggedToBackend(req)){
-					    live = mode.showLive;
-					}
+				    boolean live=mode.showLive;
 
 				    if (req.getSession(false) != null && req.getSession().getAttribute("tm_date")!=null) {
 				        live=true;
@@ -365,11 +367,21 @@ public class BinaryExporterServlet extends HttpServlet {
           DbConnectionFactory.closeSilently();
           return;
         }
-        inputFile = APILocator.getTempFileAPI().getTempFile(user, req.getSession().getId(), shorty.longId).get().file;
+        inputFile = APILocator.getTempFileAPI().getTempFile(req, shorty.longId).get().file;
       }
-			
-			
-			
+      
+
+      if(params.get("quality_q")!=null) {
+      	final UserAgent userAgent = new UserAgent(req.getHeader("user-agent"));
+        if(userAgent.getBrowser() == Browser.SAFARI || userAgent.getOperatingSystem().getGroup() == OperatingSystem.IOS){
+          params.put("jpeg_q", params.get("quality_q"));
+          params.put("jpeg_p",  new String[] {"1"});
+        }else {
+          params.put("webp_q", params.get("quality_q"));
+        }
+      }
+
+
 			
 			//DOTCMS-5674
 			if(UtilMethods.isSet(fieldVarName)){
@@ -378,29 +390,39 @@ public class BinaryExporterServlet extends HttpServlet {
 			}
 			data = exporter.exportContent(inputFile, params);
 
-			// THIS IS WHERE THE MAGIC HAPPENS
-			// save to session if user looking to edit a file
-			if (req.getParameter(WebKeys.IMAGE_TOOL_SAVE_FILES) != null) {
-                Map<String, String> files;
-                if ( session != null && session.getAttribute( WebKeys.IMAGE_TOOL_SAVE_FILES ) != null ) {
-                    files = (Map<String, String>) session.getAttribute( WebKeys.IMAGE_TOOL_SAVE_FILES );
-                } else {
-                    files = new HashMap<>();
-                }
-                String ext = UtilMethods.getFileExtension(data.getDataFile().getName());
-		    	File tmp = File.createTempFile("binaryexporter", "." +ext);
-		    	FileUtil.copyFile(data.getDataFile(), tmp);
-		    	tmp.deleteOnExit();
-		    	if (req.getParameter("binaryFieldId") != null) {
-		    		files.put(req.getParameter("binaryFieldId"), tmp.getCanonicalPath());
-		    	} else {
-		    		files.put(fieldVarName, tmp.getCanonicalPath());
-		    	}
-		    	resp.getWriter().println(UtilMethods.encodeURIComponent(PublicEncryptionFactory.encryptString(tmp.getAbsolutePath())));
-		    	resp.getWriter().close();
-		    	resp.flushBuffer();
-		    	return;
-			}
+      // THIS IS WHERE THE MAGIC HAPPENS
+      // this creates a temp resource using the altered file
+      if (req.getParameter(WebKeys.IMAGE_TOOL_SAVE_FILES) != null && user!=null && !user.equals(APILocator.getUserAPI().getAnonymousUser())) {
+        final DotTempFile temp = APILocator.getTempFileAPI().createEmptyTempFile(inputFile.getName(), req);
+        FileUtil.copyFile(data.getDataFile(), temp.file);
+        resp.getWriter().println(DotObjectMapperProvider.getInstance().getDefaultObjectMapper().writeValueAsString(temp));
+        resp.getWriter().close();
+        resp.flushBuffer();
+        return;
+      }
+
+      if(req.getParameter(WebKeys.IMAGE_TOOL_CLIPBOARD) != null && user!=null && !user.equals(APILocator.getUserAPI().getAnonymousUser())) {
+        List<String> list = (List<String>) req.getSession().getAttribute(WebKeys.IMAGE_TOOL_CLIPBOARD);
+        if (list == null) {
+          list = new ArrayList<String>();
+        }
+        // we only show nine images in clipboard
+        if (list.size() > 8) {
+          list = list.subList(0, 8);
+        }
+  
+        if (list.contains(req.getRequestURI())) {
+          list.remove(req.getRequestURI());
+        }
+        list.add(0, req.getRequestURI());
+  
+        req.getSession().setAttribute(WebKeys.IMAGE_TOOL_CLIPBOARD, list);
+  
+        resp.getWriter().println("success");
+        resp.getWriter().println(req.getRequestURI());
+        return;
+      }
+      
 
 			/*******************************
 			 *
@@ -612,7 +634,9 @@ public class BinaryExporterServlet extends HttpServlet {
 				    req.getSession().removeAttribute(com.dotmarketing.util.WebKeys.REDIRECT_AFTER_LOGIN);
 					resp.sendError(HttpServletResponse.SC_FORBIDDEN);
 				}else{
-				    req.getSession().setAttribute(com.dotmarketing.util.WebKeys.REDIRECT_AFTER_LOGIN, req.getAttribute("javax.servlet.forward.request_uri"));
+					final String requestUri = (String) req.getAttribute("javax.servlet.forward.request_uri");
+					Logger.debug(this, "Setting redirect after login to requested uri: " + requestUri);
+				    req.getSession().setAttribute(com.dotmarketing.util.WebKeys.REDIRECT_AFTER_LOGIN, requestUri);
 					resp.sendError(HttpServletResponse.SC_UNAUTHORIZED);
 				}
 			  }
@@ -653,28 +677,12 @@ public class BinaryExporterServlet extends HttpServlet {
 		return content;
 	}
 
-	@SuppressWarnings("unchecked")
-	private Map sortByKey(Map map) {
-		List list = new LinkedList(map.entrySet());
-		Collections.sort(list, new Comparator() {
-			public int compare(Object o1, Object o2) {
-				return ((Comparable) ((Map.Entry) (o1)).getKey()).compareTo(((Map.Entry) (o2)).getKey());
-			}
-		});
-		// logger.info(list);
-		Map result = new LinkedHashMap();
-		for (Iterator it = list.iterator(); it.hasNext();) {
-			Map.Entry entry = (Map.Entry) it.next();
-			result.put(entry.getKey(), entry.getValue());
-		}
-		return result;
-	}
 
 	private Map<String,String[]> getURIParams(HttpServletRequest request){
 		String url = request.getRequestURI().toString();
 		url = (url.startsWith("/")) ? url.substring(1, url.length()) : url;
 		String p[] = url.split("/");
-		Map<String, String[]> map = new HashMap<>();
+		Map<String, String[]> map = new LinkedHashMap<>();
 
 		String key =null;
 		for(String x : p){

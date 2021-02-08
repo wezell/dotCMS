@@ -6,15 +6,15 @@ import com.dotmarketing.exception.DotDataException;
 import com.dotmarketing.exception.DotSecurityException;
 import com.dotmarketing.portlets.workflows.model.WorkflowActionClassParameter;
 import com.dotmarketing.portlets.workflows.model.WorkflowHistory;
+import com.dotmarketing.portlets.workflows.model.WorkflowHistoryState;
 import com.dotmarketing.util.Logger;
 import com.dotmarketing.util.UtilMethods;
 import com.liferay.portal.model.User;
 import com.liferay.util.Validator;
-import java.util.Collection;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
-import java.util.StringTokenizer;
+import io.vavr.Tuple;
+import io.vavr.Tuple2;
+
+import java.util.*;
 
 /**
  * This utility class provides common-use methods that can be accessed by the different workflow
@@ -43,13 +43,16 @@ public class WorkflowActionletUtil {
      *
      * @return The list of {@link User} objects based on the specified IDs.
      */
-    public static Set<User> getUsersFromIds(final String ids, final String delimiter) {
+    public static Tuple2<Set<User>, Set<Role>> getUsersFromIds(final String ids, final String delimiter) {
+
         final Set<User> userSet = new HashSet<>();
+        final Set<Role> roleSet = new HashSet<>();
         final StringTokenizer tokenizer = new StringTokenizer(ids, delimiter);
         while (tokenizer.hasMoreTokens()) {
-            boolean idNotFound = Boolean.FALSE;
+
+            boolean idNotFound  = Boolean.FALSE;
             Exception exception = null;
-            final String token = tokenizer.nextToken().trim();
+            final String token  = tokenizer.nextToken().trim();
             if (Validator.isEmailAddress(token)) {
                 try {
                     final User user = APILocator.getUserAPI()
@@ -62,6 +65,7 @@ public class WorkflowActionletUtil {
                     exception = e;
                 }
             } else {
+
                 try {
                     final User user = APILocator.getUserAPI()
                             .loadUserById(token, APILocator.getUserAPI().getSystemUser(), false);
@@ -72,11 +76,13 @@ public class WorkflowActionletUtil {
                     idNotFound = Boolean.TRUE;
                     exception = e;
                 }
+
                 try {
                     final Role role = APILocator.getRoleAPI().loadRoleByKey(token);
                     final List<User> approvingUsersInRole = APILocator.getRoleAPI()
                             .findUsersForRole(role);
                     userSet.addAll(approvingUsersInRole);
+                    roleSet.add(role);
                     idNotFound = Boolean.FALSE;
                 } catch (DotSecurityException e) {
                     Logger.warn(WorkflowActionletUtil.class,
@@ -88,14 +94,17 @@ public class WorkflowActionletUtil {
                     exception = e;
                 }
             }
+
             if (idNotFound) {
                 Logger.warn(WorkflowActionletUtil.class,
                         "The following email/userID/role key could not be found: " + token,
                         exception);
             }
         }
-        return userSet;
+
+        return Tuple.of(userSet, roleSet);
     }
+
 
     /**
      * Returns the value of the specified actionlet parameter. If the value is {@code null}, the
@@ -171,8 +180,12 @@ public class WorkflowActionletUtil {
         final Set<User> hasApproved = new HashSet<>();
         for (final User user : requiredApprovers) {
             for (final WorkflowHistory historyItem : historyList) {
-                if (historyItem.getActionId().equals(contentId) && user.getUserId()
-                        .equals(historyItem.getMadeBy())) {
+
+                final Map<String, Object> changeMap = historyItem.getChangeMap();
+                if (historyItem.getActionId().equals(contentId) &&
+                        user.getUserId().equals(historyItem.getMadeBy()) && // if it is the action id and it is not reset.
+                        !WorkflowHistoryState.RESET.name().equals(changeMap.get("state"))
+                ) {
                     hasApproved.add(user);
                     if (limit > 0 && hasApproved.size() >= limit) {
                         return hasApproved;

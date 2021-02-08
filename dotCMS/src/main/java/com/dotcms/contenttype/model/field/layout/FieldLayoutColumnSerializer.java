@@ -1,12 +1,18 @@
 package com.dotcms.contenttype.model.field.layout;
 
+import com.dotcms.contenttype.model.type.ContentType;
+import com.dotcms.contenttype.transform.contenttype.ContentTypeInternationalization;
 import com.dotcms.contenttype.transform.field.JsonFieldTransformer;
+import com.dotmarketing.business.APILocator;
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.JsonSerializer;
 import com.fasterxml.jackson.databind.SerializerProvider;
 
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 
 /**
  * {@link FieldLayoutColumn} serializer, it serialize a json with the follow format:
@@ -47,9 +53,35 @@ public class FieldLayoutColumnSerializer extends JsonSerializer<FieldLayoutColum
 
         final JsonFieldTransformer jsonColumnsTransformer =
                 new JsonFieldTransformer(fieldLayoutColumn.getFields());
-        jsonGenerator.writeObjectField("fields", jsonColumnsTransformer.mapList());
+
+        final List<Map<String, Object>> fieldsMap = getFieldInternationalization(serializerProvider,
+                jsonColumnsTransformer.mapList());
+
+        jsonGenerator.writeObjectField("fields", fieldsMap);
 
         jsonGenerator.writeEndObject();
         jsonGenerator.flush();
+    }
+
+    private List<Map<String, Object>> getFieldInternationalization(final SerializerProvider serializerProvider,
+                                                                   final List<Map<String, Object>> fieldsMap) {
+
+        final List<Map<String, Object>> fieldsInternationalizationMap = new ArrayList<>();
+        final ContentTypeInternationalization contentTypeInternationalization =
+                (ContentTypeInternationalization) serializerProvider.getAttribute("internationalization");
+
+        if (contentTypeInternationalization != null) {
+            final ContentType contentType = (ContentType) serializerProvider.getAttribute("type");
+
+            for (final Map<String, Object> fieldMap : fieldsMap) {
+                final Map<String, Object> fieldInternationalizationMap = APILocator.getContentTypeFieldAPI()
+                        .getFieldInternationalization(contentType, contentTypeInternationalization, fieldMap);
+                fieldsInternationalizationMap.add(fieldInternationalizationMap);
+            }
+        } else {
+            fieldsInternationalizationMap.addAll(fieldsMap);
+        }
+
+        return fieldsInternationalizationMap;
     }
 }

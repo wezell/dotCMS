@@ -1,10 +1,6 @@
 package com.dotcms.content.elasticsearch.business;
 
 
-import static com.dotcms.exception.ExceptionUtil.bubbleUpException;
-import static com.dotcms.exception.ExceptionUtil.getLocalizedMessageOrDefault;
-import static com.dotmarketing.portlets.contentlet.model.Contentlet.URL_MAP_FOR_CONTENT_KEY;
-
 import com.dotcms.api.system.event.ContentletSystemEventUtil;
 import com.dotcms.api.web.HttpServletRequestThreadLocal;
 import com.dotcms.business.CloseDBIfOpened;
@@ -18,12 +14,15 @@ import com.dotcms.content.elasticsearch.business.event.ContentletDeletedEvent;
 import com.dotcms.content.elasticsearch.business.event.ContentletPublishEvent;
 import com.dotcms.content.elasticsearch.constants.ESMappingConstants;
 import com.dotcms.content.elasticsearch.util.ESUtils;
+import com.dotcms.contenttype.business.BaseTypeToContentTypeStrategy;
+import com.dotcms.contenttype.business.BaseTypeToContentTypeStrategyResolver;
 import com.dotcms.contenttype.business.ContentTypeAPI;
 import com.dotcms.contenttype.exception.NotFoundInDbException;
 import com.dotcms.contenttype.model.field.BinaryField;
 import com.dotcms.contenttype.model.field.CategoryField;
 import com.dotcms.contenttype.model.field.ConstantField;
 import com.dotcms.contenttype.model.field.DataTypes;
+import com.dotcms.contenttype.model.field.FieldVariable;
 import com.dotcms.contenttype.model.field.HostFolderField;
 import com.dotcms.contenttype.model.field.RelationshipField;
 import com.dotcms.contenttype.model.field.TagField;
@@ -43,12 +42,15 @@ import com.dotcms.repackage.com.google.common.collect.Lists;
 import com.dotcms.repackage.com.google.common.collect.Maps;
 import com.dotcms.repackage.com.google.common.collect.Sets;
 import com.dotcms.repackage.org.apache.commons.io.FileUtils;
+import com.dotcms.rest.AnonymousAccess;
 import com.dotcms.rest.api.v1.temp.DotTempFile;
 import com.dotcms.rest.api.v1.temp.TempFileAPI;
-import com.dotcms.services.VanityUrlServices;
 import com.dotcms.system.event.local.business.LocalSystemEventsAPI;
 import com.dotcms.system.event.local.type.content.CommitListenerEvent;
 import com.dotcms.util.CollectionsUtils;
+import com.dotcms.util.ConversionUtils;
+import com.dotcms.util.DotPreconditions;
+import com.dotcms.util.ThreadContextUtil;
 import com.dotmarketing.beans.Host;
 import com.dotmarketing.beans.Identifier;
 import com.dotmarketing.beans.MultiTree;
@@ -71,6 +73,7 @@ import com.dotmarketing.cache.FieldsCache;
 import com.dotmarketing.common.db.DotConnect;
 import com.dotmarketing.common.model.ContentletSearch;
 import com.dotmarketing.common.reindex.ReindexQueueAPI;
+import com.dotmarketing.comparators.ContentMapComparator;
 import com.dotmarketing.db.DbConnectionFactory;
 import com.dotmarketing.db.FlushCacheRunnable;
 import com.dotmarketing.db.HibernateUtil;
@@ -100,12 +103,14 @@ import com.dotmarketing.portlets.contentlet.model.ContentletDependencies;
 import com.dotmarketing.portlets.contentlet.model.ContentletVersionInfo;
 import com.dotmarketing.portlets.contentlet.model.IndexPolicy;
 import com.dotmarketing.portlets.contentlet.util.ContentletUtil;
+import com.dotmarketing.portlets.fileassets.business.FileAsset;
 import com.dotmarketing.portlets.fileassets.business.FileAssetAPI;
 import com.dotmarketing.portlets.fileassets.business.FileAssetValidationException;
 import com.dotmarketing.portlets.fileassets.business.IFileAsset;
 import com.dotmarketing.portlets.folders.business.FolderAPI;
 import com.dotmarketing.portlets.folders.model.Folder;
 import com.dotmarketing.portlets.htmlpageasset.business.HTMLPageAssetAPI;
+import com.dotmarketing.portlets.htmlpageasset.business.HTMLPageAssetAPI.TemplateContainersReMap;
 import com.dotmarketing.portlets.htmlpageasset.model.IHTMLPage;
 import com.dotmarketing.portlets.languagesmanager.business.LanguageAPI;
 import com.dotmarketing.portlets.languagesmanager.model.Language;
@@ -120,8 +125,9 @@ import com.dotmarketing.portlets.structure.model.Structure;
 import com.dotmarketing.portlets.structure.transform.ContentletRelationshipsTransformer;
 import com.dotmarketing.portlets.templates.model.Template;
 import com.dotmarketing.portlets.workflows.business.WorkflowAPI;
+import com.dotmarketing.portlets.workflows.business.WorkflowAPI.SystemAction;
+import com.dotmarketing.portlets.workflows.model.WorkflowAction;
 import com.dotmarketing.portlets.workflows.model.WorkflowComment;
-import com.dotmarketing.portlets.workflows.model.WorkflowHistory;
 import com.dotmarketing.portlets.workflows.model.WorkflowProcessor;
 import com.dotmarketing.portlets.workflows.model.WorkflowTask;
 import com.dotmarketing.tag.business.TagAPI;
@@ -142,21 +148,31 @@ import com.dotmarketing.util.UUIDGenerator;
 import com.dotmarketing.util.UtilMethods;
 import com.dotmarketing.util.WebKeys;
 import com.dotmarketing.util.WebKeys.Relationship.RELATIONSHIP_CARDINALITY;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.liferay.portal.NoSuchUserException;
 import com.liferay.portal.language.LanguageException;
 import com.liferay.portal.language.LanguageUtil;
 import com.liferay.portal.model.User;
-import com.liferay.portal.util.PortalUtil;
 import com.liferay.util.FileUtil;
 import com.liferay.util.StringPool;
+import com.liferay.util.StringUtil;
 import com.rainerhahnekamp.sneakythrow.Sneaky;
 import com.thoughtworks.xstream.XStream;
 import com.thoughtworks.xstream.io.xml.DomDriver;
-
 import io.vavr.control.Try;
+import org.apache.commons.lang.StringUtils;
+import org.elasticsearch.action.search.SearchPhaseExecutionException;
+import org.elasticsearch.action.search.SearchResponse;
+import org.elasticsearch.search.SearchHit;
+import org.elasticsearch.search.SearchHits;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+import org.springframework.beans.BeanUtils;
 
+import javax.activation.MimeType;
+import javax.servlet.http.HttpServletRequest;
 import java.io.BufferedOutputStream;
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -178,23 +194,19 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
-import javax.servlet.http.HttpServletRequest;
-
-import org.apache.commons.lang.StringUtils;
-import org.elasticsearch.action.search.SearchPhaseExecutionException;
-import org.elasticsearch.action.search.SearchResponse;
-import org.elasticsearch.search.SearchHit;
-import org.elasticsearch.search.SearchHits;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
-import org.springframework.beans.BeanUtils;
+import static com.dotcms.exception.ExceptionUtil.bubbleUpException;
+import static com.dotcms.exception.ExceptionUtil.getLocalizedMessageOrDefault;
+import static com.dotmarketing.portlets.contentlet.model.Contentlet.URL_MAP_FOR_CONTENT_KEY;
 
 /**
  * Implementation class for the {@link ContentletAPI} interface.
@@ -223,7 +235,8 @@ public class ESContentletAPIImpl implements ContentletAPI {
     private final TagAPI                tagAPI;
     private final IdentifierStripedLock lockManager;
     private final TempFileAPI           tempApi ;
-    private static final int MAX_LIMIT = 10000;
+    public static final int MAX_LIMIT = 10000;
+    private static final boolean INCLUDE_DEPENDENCIES = true;
 
     private static final String backupPath = ConfigUtils.getBackupPath() + File.separator + "contentlets";
 
@@ -236,15 +249,21 @@ public class ESContentletAPIImpl implements ContentletAPI {
 
     private final ContentletSystemEventUtil contentletSystemEventUtil;
     private final LocalSystemEventsAPI      localSystemEventsAPI;
+    private final BaseTypeToContentTypeStrategyResolver baseTypeToContentTypeStrategyResolver =
+            BaseTypeToContentTypeStrategyResolver.getInstance();
 
     public static enum QueryType {
         search, suggest, moreLike, Facets
     };
 
+    private static final Supplier<String> ND_SUPPLIER = ()->"N/D";
+    private ESReadOnlyMonitor esReadOnlyMonitor;
+
     /**
      * Default class constructor.
      */
-    public ESContentletAPIImpl () {
+    @VisibleForTesting
+    public ESContentletAPIImpl (final ESReadOnlyMonitor esReadOnlyMonitor) {
         indexAPI = new ContentletIndexAPIImpl();
         fieldAPI = APILocator.getFieldAPI();
         contentFactory = new ESContentFactoryImpl();
@@ -258,8 +277,13 @@ public class ESContentletAPIImpl implements ContentletAPI {
         localSystemEventsAPI      = APILocator.getLocalSystemEventsAPI();
         lockManager = DotConcurrentFactory.getInstance().getIdentifierStripedLock();
         tempApi=  APILocator.getTempFileAPI();
-
+        this.esReadOnlyMonitor = esReadOnlyMonitor;
     }
+
+    public ESContentletAPIImpl () {
+        this(ESReadOnlyMonitor.getInstance());
+    }
+
 
     @Override
     public SearchResponse esSearchRaw ( String esQuery, boolean live, User user, boolean respectFrontendRoles ) throws DotSecurityException, DotDataException {
@@ -363,15 +387,19 @@ public class ESContentletAPIImpl implements ContentletAPI {
         }
 
         try {
-            ContentletVersionInfo clvi = APILocator.getVersionableAPI().getContentletVersionInfo(identifier, languageId);
-            if(clvi ==null){
-                throw new DotContentletStateException("No contenlet found for given identifier");
+            Optional<ContentletVersionInfo> clvi = APILocator.getVersionableAPI().getContentletVersionInfo(identifier, languageId);
+            String liveInode = null;
+            String workingInode = null;
+
+            if(clvi.isPresent()) {
+                liveInode = clvi.get().getLiveInode();
+                workingInode = clvi.get().getWorkingInode();
             }
-            if(live){
-                return find(clvi.getLiveInode(), user, respectFrontendRoles);
-            }
-            else{
-                return find(clvi.getWorkingInode(), user, respectFrontendRoles);
+
+            if (live) {
+                return find(liveInode, user, respectFrontendRoles);
+            } else {
+                return find(workingInode, user, respectFrontendRoles);
             }
         }catch (DotSecurityException se) {
             throw se;
@@ -394,68 +422,76 @@ public class ESContentletAPIImpl implements ContentletAPI {
         try {
 
             // try the user language
-            ContentletVersionInfo contentletVersionInfo =
+            Optional<ContentletVersionInfo> contentletVersionInfo =
                     APILocator.getVersionableAPI().getContentletVersionInfo(identifier, tryLanguage);
 
             // try the fallback if does not exists
-            if (tryLanguage != defaultLanguageId && (contentletVersionInfo == null || (live && contentletVersionInfo.getLiveInode() == null))) {
+            if (tryLanguage != defaultLanguageId && (!contentletVersionInfo.isPresent()
+                    || (live && contentletVersionInfo.get().getLiveInode() == null))) {
                 fallback              = true;  // using the fallback
                 contentletVersionInfo = APILocator.getVersionableAPI().getContentletVersionInfo(identifier, defaultLanguageId);
             }
 
-            if (contentletVersionInfo == null) {
-
+            if (!contentletVersionInfo.isPresent()) {
                 return Optional.empty();
             }
 
             final Contentlet contentlet =  live?
-                    this.find(contentletVersionInfo.getLiveInode(), user, respectFrontendRoles) :
-                    this.find(contentletVersionInfo.getWorkingInode(), user, respectFrontendRoles);
+                    this.find(contentletVersionInfo.get().getLiveInode(), user, respectFrontendRoles) :
+                    this.find(contentletVersionInfo.get().getWorkingInode(), user, respectFrontendRoles);
 
             if (null == contentlet) {
-
                 return Optional.empty();
             }
 
             // if we are using the fallback, and it is not allowed, return empty
             if (fallback && tryLanguage != defaultLanguageId && !contentlet.getContentType().languageFallback()) {
-
                 return Optional.empty();
             }
 
             return Optional.of(contentlet);
         } catch (Exception e) {
-
             throw new DotContentletStateException("Can't find contentlet: " + identifier + " lang:" + incomingLangId + " live:" + live, e);
+        }
+    }
+
+    @CloseDBIfOpened
+    @Override
+    public Contentlet findContentletByIdentifierAnyLanguage(final String identifier, final boolean includeDeleted) throws DotDataException {
+        try {
+            return contentFactory.findContentletByIdentifierAnyLanguage(identifier, includeDeleted);
+
+        } catch (Exception e) {
+            throw new DotContentletStateException("Can't find contentlet: " + identifier, e);
         }
     }
     
     
-    
-    
     @CloseDBIfOpened
     @Override
-    public Contentlet findContentletByIdentifierAnyLanguage(final String identifier) throws DotDataException, DotSecurityException {
+    public Contentlet findContentletByIdentifierAnyLanguage(final String identifier) throws DotDataException {
         try {
             return contentFactory.findContentletByIdentifierAnyLanguage(identifier);
-        } catch (DotSecurityException se) {
-            throw se;
+
         } catch (Exception e) {
             throw new DotContentletStateException("Can't find contentlet: " + identifier, e);
         }
     }
 
+
     @CloseDBIfOpened
     @Override
-    public List<Contentlet> findContentletsByIdentifiers(String[] identifiers, boolean live, long languageId, User user, boolean respectFrontendRoles)throws DotDataException, DotSecurityException, DotContentletStateException {
-        List<Contentlet> l = new ArrayList<Contentlet>();
+    public List<Contentlet> findContentletsByIdentifiers(final String[] identifiers, final boolean live, final long languageId, final User user, final boolean respectFrontendRoles)
+            throws DotDataException, DotSecurityException, DotContentletStateException {
+        final List<Contentlet> contentlets = new ArrayList<>();
 
-        for(String identifier : identifiers){
-            Contentlet con = findContentletByIdentifier(identifier.trim(), live, languageId, user, respectFrontendRoles);
-            l.add(con);
+        for(final String identifier : identifiers) {
+
+            final Contentlet contentlet = findContentletByIdentifier(identifier.trim(), live, languageId, user, respectFrontendRoles);
+            contentlets.add(contentlet);
         }
         
-        return l;
+        return contentlets;
     }
 
     @CloseDBIfOpened
@@ -531,102 +567,135 @@ public class ESContentletAPIImpl implements ContentletAPI {
         }
     }
 
-    // note: is not annotated with WrapInTransaction b/c it handles his own transaction locally in the methodok
+    // note: is not annotated with WrapInTransaction b/c it handles his own transaction locally in the method
     @WrapInTransaction
     @Override
-    public void publish(Contentlet contentlet, User user, boolean respectFrontendRoles) throws DotSecurityException, DotDataException, DotStateException {
+    public void publish(final Contentlet contentlet, final User userIn, final boolean respectFrontendRoles) throws DotSecurityException, DotDataException, DotStateException {
+        final User user = (userIn!=null) ? userIn : APILocator.getUserAPI().getAnonymousUser();
+        String contentPushPublishDate = contentlet.getStringProperty(Contentlet.WORKFLOW_PUBLISH_DATE);
+        String contentPushExpireDate  = contentlet.getStringProperty("wfExpireDate");
 
-            String contentPushPublishDate = contentlet.getStringProperty("wfPublishDate");
-            String contentPushExpireDate = contentlet.getStringProperty("wfExpireDate");
+        contentPushPublishDate = UtilMethods.isSet(contentPushPublishDate)?contentPushPublishDate:"N/D";
+        contentPushExpireDate  = UtilMethods.isSet(contentPushExpireDate)?contentPushExpireDate:  "N/D";
 
-            contentPushPublishDate = UtilMethods.isSet(contentPushPublishDate)?contentPushPublishDate:"N/D";
-            contentPushExpireDate = UtilMethods.isSet(contentPushExpireDate)?contentPushExpireDate:"N/D";
+        ActivityLogger.logInfo(getClass(), "Publishing Content", "StartDate: " +contentPushPublishDate+ "; "
+                + "EndDate: " +contentPushExpireDate + "; User:" + (user != null ? user.getUserId() : "Unknown")
+                + "; ContentIdentifier: " + (contentlet != null ? contentlet.getIdentifier() : "Unknown"), contentlet.getHost());
 
-            ActivityLogger.logInfo(getClass(), "Publishing Content", "StartDate: " +contentPushPublishDate+ "; "
-                    + "EndDate: " +contentPushExpireDate + "; User:" + (user != null ? user.getUserId() : "Unknown")
-                    + "; ContentIdentifier: " + (contentlet != null ? contentlet.getIdentifier() : "Unknown"), contentlet.getHost());
+        try {
 
-            try {
+            final Optional<Contentlet> contentletOpt = this.checkAndRunPublishAsWorkflow(contentlet, user, respectFrontendRoles);
+            if (contentletOpt.isPresent()) {
 
-                if(contentlet.getInode().equals(""))
-                    throw new DotContentletStateException(CAN_T_CHANGE_STATE_OF_CHECKED_OUT_CONTENT);
-
-                if(!permissionAPI.doesUserHavePermission(contentlet, PermissionAPI.PERMISSION_PUBLISH, user, respectFrontendRoles)){
-                    Logger.debug(PublishFactory.class, ()-> "publishAsset: user = " + (user != null ? user.getEmailAddress() : "Unknown")
-                            + ", don't have permissions to publish: " + (contentlet != null ? contentlet.getInode() : "Unknown"));
-
-                    //If the contentlet has CMS Owner Publish permission on it, the user creating the new contentlet is allowed to publish
-                    List<Role> roles = permissionAPI.getRoles(contentlet.getPermissionId(), PermissionAPI.PERMISSION_PUBLISH, "CMS Owner", 0, -1);
-                    Role cmsOwner = APILocator.getRoleAPI().loadCMSOwnerRole();
-                    boolean isCMSOwner = false;
-
-                    if(roles.size() > 0){
-                        for (Role role : roles) {
-                            if(role == cmsOwner){
-                                isCMSOwner = true;
-                                break;
-                            }
-                        }
-
-                        if(!isCMSOwner){
-                            throw new DotSecurityException("User " + (user != null ? user.getUserId() : "Unknown")
-                                    + "does not have permission to publish contentlet with inode "
-                                    + (contentlet != null ? contentlet.getInode() : "Unknown"));
-                        }
-                    }else{
-                        throw new DotSecurityException("User " + (user != null ? user.getUserId() : "Unknown")
-                                + "does not have permission to publish contentlet with inode "
-                                + (contentlet != null ? contentlet.getInode() : "Unknown"));
-                    }
+                Logger.info(this, "A Workflow has been run instead of a simple publish: " +
+                        contentlet.getIdentifier());
+                if (!contentlet.getInode().equals(contentletOpt.get().getInode())) {
+                   this.copyProperties(contentlet, contentletOpt.get().getMap());
                 }
-
-                canLock(contentlet, user, respectFrontendRoles);
-
-
-                    Logger.debug(this, () -> "*****I'm a Contentlet -- Publishing");
-
-                    //Set contentlet to live and unlocked
-                    APILocator.getVersionableAPI().setLive(contentlet);
-
-                    publishAssociated(contentlet, false);
-
-                    if(contentlet.getStructure().getStructureType()==Structure.STRUCTURE_TYPE_FILEASSET) {
-                        cleanFileAssetCache(contentlet, user, respectFrontendRoles);
-                    }
-
-                    //"Enable" and/or create a tag for this Persona key tag
-                    if ( Structure.STRUCTURE_TYPE_PERSONA == contentlet.getStructure().getStructureType() ) {
-                        //If not exist create a tag based on this persona key tag
-                        APILocator.getPersonaAPI().enableDisablePersonaTag(contentlet, true);
-                    }
-
-
-                /*
-                Triggers a local system event when this contentlet commit listener is executed,
-                anyone who need it can subscribed to this commit listener event, on this case will be
-                mostly use it in order to invalidate this contentlet cache.
-                 */
-                triggerCommitListenerEvent(contentlet, user, true);
-
-                // by now, the publish event is making a duplicate reload events on the site browser
-                // so we decided to comment it out by now, and
-                //contentletSystemEventUtil.pushPublishEvent(contentlet);
-            } catch(DotDataException | DotStateException | DotSecurityException e) {
-                ActivityLogger.logInfo(getClass(), "Error Publishing Content", "StartDate: " +contentPushPublishDate+ "; "
-                        + "EndDate: " +contentPushExpireDate + "; User:" + (user != null ? user.getUserId() : "Unknown")
-                        + "; ContentIdentifier: " + (contentlet != null ? contentlet.getIdentifier() : "Unknown"), contentlet.getHost());
-                throw e;
+                return;
             }
 
-            ActivityLogger.logInfo(getClass(), "Content Published", "StartDate: " + contentPushPublishDate + "; "
-                    + "EndDate: " + contentPushExpireDate + "; User:" + (user != null ? user.getUserId() : "Unknown")
+            this.internalPublish(contentlet, user, respectFrontendRoles);
+        } catch(DotDataException | DotStateException | DotSecurityException e) {
+
+            ActivityLogger.logInfo(getClass(), "Error Publishing Content", "StartDate: " +contentPushPublishDate+ "; "
+                    + "EndDate: " +contentPushExpireDate + "; User:" + (user != null ? user.getUserId() : "Unknown")
                     + "; ContentIdentifier: " + (contentlet != null ? contentlet.getIdentifier() : "Unknown"), contentlet.getHost());
+            throw e;
+        }
 
-            //Generate a System Event for this publish operation
-            HibernateUtil.addCommitListener(
-                    () -> this.contentletSystemEventUtil.pushPublishEvent(contentlet), 1000);
+        ActivityLogger.logInfo(getClass(), "Content Published", "StartDate: " + contentPushPublishDate + "; "
+                + "EndDate: " + contentPushExpireDate + "; User:" + (user != null ? user.getUserId() : "Unknown")
+                + "; ContentIdentifier: " + (contentlet != null ? contentlet.getIdentifier() : "Unknown"), contentlet.getHost());
 
+        //Generate a System Event for this publish operation
+        HibernateUtil.addCommitListener(
+                () -> this.contentletSystemEventUtil.pushPublishEvent(contentlet), 1000);
+    }
 
+    private void internalPublish(final Contentlet contentlet, final User user, final boolean respectFrontendRoles) throws DotDataException, DotSecurityException {
+
+        if(StringPool.BLANK.equals(contentlet.getInode())) {
+
+            throw new DotContentletStateException(CAN_T_CHANGE_STATE_OF_CHECKED_OUT_CONTENT);
+        }
+
+        if(!permissionAPI.doesUserHavePermission(contentlet, PermissionAPI.PERMISSION_PUBLISH, user, respectFrontendRoles)) {
+
+            Logger.debug(PublishFactory.class, ()-> "publishAsset: user = " + (user != null ? user.getEmailAddress() : "Unknown")
+                    + ", don't have permissions to publish: " + (contentlet != null ? contentlet.getInode() : "Unknown"));
+
+            //If the contentlet has CMS Owner Publish permission on it, the user creating the new contentlet is allowed to publish
+            final List<Role> roles = permissionAPI.getRoles(contentlet.getPermissionId(),
+                    PermissionAPI.PERMISSION_PUBLISH, "CMS Owner", 0, -1);
+            final Role cmsOwner = APILocator.getRoleAPI().loadCMSOwnerRole();
+
+            if(roles.size() > 0){
+                final boolean isCMSOwner = roles.stream().anyMatch(cmsOwner::equals);
+
+                if(!isCMSOwner) {
+
+                    throw new DotSecurityException("User " + (user != null ? user.getUserId() : "Unknown")
+                            + "does not have permission to publish contentlet with inode "
+                            + (contentlet != null ? contentlet.getInode() : "Unknown"));
+                }
+            } else {
+                throw new DotSecurityException("User " + (user != null ? user.getUserId() : "Unknown")
+                        + "does not have permission to publish contentlet with inode "
+                        + (contentlet != null ? contentlet.getInode() : "Unknown"));
+            }
+        }
+
+        WorkflowProcessor workflow = null;
+        // to run a workflow we need an action id set, not be part of a workflow already and do not desired disable it
+        if(contentlet.getMap().get(Contentlet.DISABLE_WORKFLOW)==null &&
+                UtilMethods.isSet(contentlet.getActionId()) &&
+                (null == contentlet.getMap().get(Contentlet.WORKFLOW_IN_PROGRESS) ||
+                        Boolean.FALSE.equals(contentlet.getMap().get(Contentlet.WORKFLOW_IN_PROGRESS))
+                ))  {
+            workflow = APILocator.getWorkflowAPI().fireWorkflowPreCheckin(contentlet, user);
+        }
+
+        canLock(contentlet, user, respectFrontendRoles);
+
+        //Set contentlet to live and unlocked
+        APILocator.getVersionableAPI().setLive(contentlet);
+
+        publishAssociated(contentlet, false);
+
+        if(null != workflow) {
+
+            workflow.setContentlet(contentlet);
+            APILocator.getWorkflowAPI().fireWorkflowPostCheckin(workflow);
+        }
+
+        if(contentlet.isFileAsset()) {
+
+            cleanFileAssetCache(contentlet, user, respectFrontendRoles);
+        }
+
+        //"Enable" and/or create a tag for this Persona key tag
+        if ( Structure.STRUCTURE_TYPE_PERSONA == contentlet.getStructure().getStructureType() ) {
+            //If not exist create a tag based on this persona key tag
+            APILocator.getPersonaAPI().enableDisablePersonaTag(contentlet, true);
+        }
+
+        if(contentlet.isVanityUrl()) {
+
+            APILocator.getVanityUrlAPI().invalidateVanityUrl(contentlet);
+        }
+        
+        
+        /*
+        Triggers a local system event when this contentlet commit listener is executed,
+        anyone who need it can subscribed to this commit listener event, on this case will be
+        mostly use it in order to invalidate this contentlet cache.
+         */
+        triggerCommitListenerEvent(contentlet, user, true);
+
+        // by now, the publish event is making a duplicate reload events on the site browser
+        // so we decided to comment it out by now, and
+        //contentletSystemEventUtil.pushPublishEvent(contentlet);
     }
 
     @Override
@@ -638,20 +707,22 @@ public class ESContentletAPIImpl implements ContentletAPI {
 
     @WrapInTransaction
     @Override
-    public void publishAssociated(Contentlet contentlet, boolean isNew, boolean isNewVersion) throws
+    public void publishAssociated(final Contentlet contentlet, final boolean isNew, final boolean isNewVersion) throws
             DotSecurityException, DotDataException, DotStateException {
 
-        if (!contentlet.isWorking())
-            throw new DotContentletStateException("Only the working version can be published");
+        if (!contentlet.isWorking()) {
 
-        indexAPI.addContentToIndex(contentlet, true, false);
+            throw new DotContentletStateException("Only the working version can be published");
+        }
+
+        ThreadContextUtil.ifReindex(()->indexAPI.addContentToIndex(contentlet, INCLUDE_DEPENDENCIES), INCLUDE_DEPENDENCIES);
 
         // Publishes the files associated with the Contentlet
-        List<Field> fields = FieldsCache.getFieldsByStructureInode(contentlet.getStructureInode());
-        Language defaultLang = languageAPI.getDefaultLanguage();
-        User systemUser = APILocator.getUserAPI().getSystemUser();
+        final List<Field> fields = FieldsCache.getFieldsByStructureInode(contentlet.getStructureInode());
+        final Language defaultLang = languageAPI.getDefaultLanguage();
+        final User systemUser = APILocator.getUserAPI().getSystemUser();
 
-        for (Field field : fields) {
+        for (final Field field : fields) {
             if (Field.FieldType.IMAGE.toString().equals(field.getFieldType()) ||
                     Field.FieldType.FILE.toString().equals(field.getFieldType())) {
 
@@ -659,7 +730,7 @@ public class ESContentletAPIImpl implements ContentletAPI {
                 // default lang (DEFAULT_FILE_TO_DEFAULT_LANGUAGE=true)
                 try {
                     // We need to get the Identifier from the field. (Image or File)
-                    String fieldValue = UtilMethods.isSet(getFieldValue(contentlet, field)) ?
+                    final String fieldValue = UtilMethods.isSet(getFieldValue(contentlet, field)) ?
                             getFieldValue(contentlet, field).toString() : StringUtils.EMPTY;
                     Identifier id = APILocator.getIdentifierAPI().find(fieldValue);
 
@@ -740,9 +811,9 @@ public class ESContentletAPIImpl implements ContentletAPI {
             } catch (DotSecurityException e) {
                 Logger.debug(this, "User has permissions to publish the content = " + contentlet.getIdentifier()
                         + " but not the related link = " + link.getIdentifier());
-                throw new DotStateException("Problem occured while publishing link");
+                throw new DotStateException("Problem occured while publishing link: " + e.getMessage(), e);
             } catch (Exception e) {
-                throw new DotStateException("Problem occured while publishing file");
+                throw new DotStateException("Problem occured while publishing file: " + e.getMessage(), e);
             }
         }
     } // publishRelatedLinks.
@@ -858,13 +929,13 @@ public class ESContentletAPIImpl implements ContentletAPI {
         }
         if(respectFrontendRoles) {
             buffy.append("(permissions:p" + APILocator.getRoleAPI().loadCMSAnonymousRole().getId() + ".1p*) ");
-            if (user != null && !user.getUserId().equals("anonymous")) {
+            if (user != null && user.isFrontendUser()) {
                 buffy.append("(permissions:p" + APILocator.getRoleAPI().loadLoggedinSiteRole().getId() + ".1p*)");
             }
         }
         buffy.append(")");
         
-        if(user==null || "anonymous".equals(user.getUserId())) {
+        if(user==null || !user.isBackendUser()) {
             buffy.append(" +live:true ");
         }
         
@@ -885,7 +956,7 @@ public class ESContentletAPIImpl implements ContentletAPI {
                 isAdmin = true;
             }
         }
-        StringBuffer buffy = new StringBuffer(luceneQuery);
+        final StringBuffer buffy = new StringBuffer(luceneQuery);
 
         // Permissions in the query
         if (!isAdmin)
@@ -894,31 +965,37 @@ public class ESContentletAPIImpl implements ContentletAPI {
         if(UtilMethods.isSet(sortBy) && sortBy.trim().equalsIgnoreCase("random")){
             sortBy="random";
         }
-        if(limit>MAX_LIMIT || limit <=0){
+
+        if(limit <=0){
             limit = MAX_LIMIT;
         }
-        SearchHits lc = contentFactory.indexSearch(buffy.toString(), limit, offset, sortBy);
-        PaginatedArrayList <ContentletSearch> list=new PaginatedArrayList<>();
-        list.setTotalResults(lc.getTotalHits());
 
-        for (SearchHit sh : lc.getHits()) {
-            try{
-                Map<String, Object> sourceMap = sh.getSourceAsMap();
-                ContentletSearch conwrapper= new ContentletSearch();
-                conwrapper.setId(sh.getId());
-                conwrapper.setIndex(sh.getIndex());
-                conwrapper.setIdentifier(sourceMap.get("identifier").toString());
-                conwrapper.setInode(sourceMap.get("inode").toString());
-                conwrapper.setScore(sh.getScore());
+        if(limit<=MAX_LIMIT) {
+            final SearchHits searchHits = contentFactory.indexSearch(buffy.toString(), limit, offset, sortBy);
+            final PaginatedArrayList <ContentletSearch> list=new PaginatedArrayList<>();
+            list.setTotalResults(searchHits.getTotalHits().value);
 
-                list.add(conwrapper);
+            for (final SearchHit searchHit : searchHits.getHits()) {
+                try{
+                    final Map<String, Object> sourceMap = searchHit.getSourceAsMap();
+                    final ContentletSearch conWrapper = new ContentletSearch();
+                    conWrapper.setId(searchHit.getId());
+                    conWrapper.setIndex(searchHit.getIndex());
+                    conWrapper.setIdentifier(sourceMap.get("identifier").toString());
+                    conWrapper.setInode(sourceMap.get("inode").toString());
+                    conWrapper.setScore(searchHit.getScore());
+
+                    list.add(conWrapper);
+                }
+                catch(Exception e){
+                    Logger.error(this,e.getMessage(),e);
+                }
             }
-            catch(Exception e){
-                Logger.error(this,e.getMessage(),e);
-            }
-
+            return list;
+        } else {
+            return contentFactory.indexSearchScroll(buffy.toString(), sortBy);
         }
-        return list;
+
     }
 
     @CloseDBIfOpened
@@ -986,65 +1063,58 @@ public class ESContentletAPIImpl implements ContentletAPI {
 
     }
 
+    @WrapInTransaction
     @Override
-    public void cleanField(Structure structure, Field field, User user, boolean respectFrontendRoles) throws DotSecurityException, DotDataException {
-
-        if(!permissionAPI.doesUserHavePermission(structure, PermissionAPI.PERMISSION_PUBLISH, user, respectFrontendRoles)){
+    public void cleanField(final Structure structure, final Date deletionDate, final Field oldField, final User user,
+            final boolean respectFrontendRoles)
+            throws DotSecurityException, DotDataException {
+        if (!permissionAPI.doesUserHavePermission(structure, PermissionAPI.PERMISSION_PUBLISH, user, respectFrontendRoles)) {
             throw new DotSecurityException("Must be able to publish structure to clean all the fields with user: "
                     + (user != null ? user.getUserId() : "Unknown"));
         }
 
-        String type = field.getFieldType();
-        if(Field.FieldType.LINE_DIVIDER.toString().equals(type) ||
-                Field.FieldType.TAB_DIVIDER.toString().equals(type) ||
-                Field.FieldType.RELATIONSHIPS_TAB.toString().equals(type) ||
-                Field.FieldType.RELATIONSHIP.toString().equals(type) ||
-                Field.FieldType.CATEGORIES_TAB.toString().equals(type) ||
-                Field.FieldType.PERMISSIONS_TAB.toString().equals(type))
-        {
-            throw new DotDataException("Unable to clean a " + type + " system field");
-        }
+        com.dotcms.contenttype.model.field.Field field = new LegacyFieldTransformer(oldField).from();
 
-        boolean localTransaction = false;
-        boolean isNewConnection  = false;
-
-        try {
-
-            localTransaction = HibernateUtil.startLocalTransactionIfNeeded();
-            isNewConnection  = !DbConnectionFactory.connectionExists();
-
-            if(Field.FieldType.BINARY.toString().equals(field.getFieldType())){
-                List<Contentlet> contentlets = contentFactory.findByStructure(structure.getInode(),0,0);
-
-                HibernateUtil.addCommitListener(() -> moveBinaryFilesToTrash(contentlets,field));
-
-                // Binary fields have nothing to do with database.
-            } else if(Field.FieldType.TAG.toString().equals(field.getFieldType())){
-                List<Contentlet> contentlets = contentFactory.findByStructure(structure.getInode(),0,0);
-
+        // Binary fields have nothing to do with database.
+        if (field instanceof BinaryField) {
+            int batchSize=500;
+            int offset=0;
+            final List<Contentlet> contentlets = new ArrayList<>();
+            contentlets.addAll(contentFactory.findByStructure(structure.getInode(), deletionDate, batchSize, offset));
+            while(!contentlets.isEmpty()) {
+                final List<Contentlet> finalList = new ArrayList<>();
+                finalList.addAll(contentlets);
+                HibernateUtil.addCommitListener(() -> moveBinaryFilesToTrash(finalList, oldField));
+                offset+=batchSize;
+                contentlets.clear();
+                contentlets.addAll(contentFactory.findByStructure(structure.getInode(), deletionDate, batchSize, offset));
+            }
+        } else if (field instanceof TagField) {
+            int batchSize=500;
+            int offset=0;
+            final List<Contentlet> contentlets = new ArrayList<>();
+            contentlets.addAll(contentFactory.findByStructure(structure.getInode(), deletionDate, batchSize, offset));
+            while(!contentlets.isEmpty()) {
                 for(Contentlet contentlet : contentlets) {
-                    tagAPI.deleteTagInodesByInodeAndFieldVarName(contentlet.getInode(), field.getVelocityVarName());
+                    tagAPI.deleteTagInodesByInodeAndFieldVarName(contentlet.getInode(), field.variable());
                 }
-
-            } else {
-
-                contentFactory.clearField(structure.getInode(), field);
+                offset+=batchSize;
+                contentlets.clear();
+                contentlets.addAll(contentFactory.findByStructure(structure.getInode(), deletionDate, batchSize, offset));
             }
+        }else if(field.dataType() == DataTypes.SYSTEM || field.dataType()== DataTypes.NONE) {
+            return;
+        } else {
 
-            if(localTransaction){
-                HibernateUtil.commitTransaction();
-            }
-        } catch (Exception e) {
-            if(localTransaction){
-                HibernateUtil.rollbackTransaction();
-            }
-            throw e;
-        } finally {
-
-            if(localTransaction && isNewConnection){
-                HibernateUtil.closeSessionSilently();
-            }
+            contentFactory.clearField(structure.getInode(), deletionDate, oldField);
         }
+    }
+
+    @Override
+    @WrapInTransaction
+    public void cleanField(Structure structure, Field oldField, User user, boolean respectFrontendRoles)
+                    throws DotSecurityException, DotDataException {
+        cleanField(structure, null, oldField, user, respectFrontendRoles);
     }
 
     @Override
@@ -1121,8 +1191,12 @@ public class ESContentletAPIImpl implements ContentletAPI {
 
         final List<MultiTree> trees = APILocator.getMultiTreeAPI().getMultiTreesByChild(id.getId());
         for (final MultiTree tree : trees) {
-            final IHTMLPage page = loadPageByIdentifier(tree.getParent1(), false, contentlet.getLanguageId(), APILocator.getUserAPI().getSystemUser(), false);
-            final Container container = APILocator.getContainerAPI().getWorkingContainerById(tree.getParent2(), APILocator.getUserAPI().getSystemUser(), false);
+            final IHTMLPage page = APILocator.getHTMLPageAssetAPI()
+                    .findByIdLanguageFallback(tree.getParent1(), contentlet.getLanguageId(), false,
+                            APILocator.getUserAPI().getSystemUser(), false);
+            final Container container = APILocator.getContainerAPI()
+                    .getWorkingContainerById(tree.getParent2(),
+                            APILocator.getUserAPI().getSystemUser(), false);
             if (InodeUtils.isSet(page.getInode()) && InodeUtils.isSet(container.getInode())) {
                 final Map<String, Object> map = new HashMap<String, Object>();
                 map.put("page", page);
@@ -1184,10 +1258,13 @@ public class ESContentletAPIImpl implements ContentletAPI {
                         contentlet);
                 final Relationship relationship = relationshipAPI
                         .getRelationshipFromField(theField, currentUser);
+                final boolean isChildField =
+                        relationshipAPI.isChildField(relationship, theField);
                 final ContentletRelationshipRecords records = contentletRelationships.new ContentletRelationshipRecords(
-                        relationship,
-                        relationshipAPI.isParent(relationship, contentlet.getContentType()));
-                records.setRecords(contentlet.getRelated(theField.variable(), user));
+                        relationship, isChildField);
+                records.setRecords(contentlet
+                        .getRelated(theField.variable(), user, respectFrontEndRoles, isChildField,
+                                contentlet.getLanguageId(), null));
                 contentletRelationships.setRelationshipsRecords(CollectionsUtils.list(records));
                 return contentletRelationships;
             } else {
@@ -1359,21 +1436,15 @@ public class ESContentletAPIImpl implements ContentletAPI {
 
     @WrapInTransaction
     @Override
-    public void unlock(Contentlet contentlet, User user, boolean respectFrontendRoles) throws DotDataException, DotSecurityException {
-        if(contentlet == null){
+    public void unlock(final Contentlet contentlet, final User user, final boolean respectFrontendRoles) throws DotDataException, DotSecurityException {
+
+        if(contentlet == null) {
+
             throw new DotContentletStateException("The contentlet cannot Be null");
         }
 
-        String contentPushPublishDate = contentlet.getStringProperty("wfPublishDate");
-        String contentPushPublishTime = contentlet.getStringProperty("wfPublishTime");
-        String contentPushExpireDate = contentlet.getStringProperty("wfExpireDate");
-        String contentPushExpireTime = contentlet.getStringProperty("wfExpireTime");
-
-        contentPushPublishDate = UtilMethods.isSet(contentPushPublishDate)?contentPushPublishDate:"N/D";
-        contentPushPublishTime = UtilMethods.isSet(contentPushPublishTime)?contentPushPublishTime:"N/D";
-        contentPushExpireDate = UtilMethods.isSet(contentPushExpireDate)?contentPushExpireDate:"N/D";
-        contentPushExpireTime = UtilMethods.isSet(contentPushExpireTime)?contentPushExpireTime:"N/D";
-
+        final String contentPushPublishDate = UtilMethods.get(contentlet.getStringProperty(Contentlet.WORKFLOW_PUBLISH_DATE), ND_SUPPLIER);
+        final String contentPushExpireDate  = UtilMethods.get(contentlet.getStringProperty(Contentlet.WORKFLOW_EXPIRE_DATE),  ND_SUPPLIER);
 
         ActivityLogger.logInfo(getClass(), "Unlocking Content", "StartDate: " +contentPushPublishDate+ "; "
                 + "EndDate: " +contentPushExpireDate + "; User:" + (user != null ? user.getUserId() : "Unknown")
@@ -1385,10 +1456,11 @@ public class ESContentletAPIImpl implements ContentletAPI {
             if(contentlet.isLocked() ){
                 // persists the webasset
                 APILocator.getVersionableAPI().setLocked(contentlet, false, user);
-                indexAPI.addContentToIndex(contentlet,false);
+                ThreadContextUtil.ifReindex(()-> indexAPI.addContentToIndex(contentlet, false));
             }
 
         } catch(DotDataException | DotStateException| DotSecurityException e) {
+
             ActivityLogger.logInfo(getClass(), "Error Unlocking Content", "StartDate: " +contentPushPublishDate+ "; "
                     + "EndDate: " +contentPushExpireDate + "; User:" + (user != null ? user.getUserId() : "Unknown")
                     + "; ContentIdentifier: " + (contentlet != null ? contentlet.getIdentifier() : "Unknown"), contentlet.getHost());
@@ -1415,11 +1487,23 @@ public class ESContentletAPIImpl implements ContentletAPI {
         return permissionAPI.filterCollection(contentFactory.getRelatedLinks(contentlet), PermissionAPI.PERMISSION_READ, respectFrontendRoles, user);
     }
 
-    @CloseDBIfOpened
+
+    @Deprecated
     @Override
     public List<Contentlet> filterRelatedContent(Contentlet contentlet, Relationship rel,
             User user, boolean respectFrontendRoles, Boolean pullByParent, int limit, int offset,
             String sortBy)
+            throws DotDataException, DotSecurityException {
+        Logger.warn(this,
+                "This implementation of ContentletAPI.filterRelatedContent is deprecated and no longer respects the sort. "
+                        + "Please, use any of the getRelatedContent implementations existing in the ContentletAPI instead ");
+        return filterRelatedContent(contentlet, rel, user, respectFrontendRoles, pullByParent, limit, offset);
+    }
+
+    @VisibleForTesting
+    @CloseDBIfOpened
+    List<Contentlet> filterRelatedContent(Contentlet contentlet, Relationship rel,
+            User user, boolean respectFrontendRoles, Boolean pullByParent, int limit, int offset)
             throws DotDataException, DotSecurityException {
 
         if (!UtilMethods.isSet(contentlet.getIdentifier())) {
@@ -1433,43 +1517,41 @@ public class ESContentletAPIImpl implements ContentletAPI {
             if (pullByParent == null) {
                 return (List<Contentlet>) CollectionsUtils
                         .join(getRelatedChildren(contentlet, rel, user, respectFrontendRoles, limit,
-                                offset, sortBy),
+                                offset),
                                 getRelatedParents(contentlet, rel, user, respectFrontendRoles,
-                                        limit, offset, sortBy)).stream()
+                                        limit, offset)).stream()
+                        .filter(Objects::nonNull)
                         .collect(CollectionsUtils.toImmutableList());
             }
             if (pullByParent) {
                 return getRelatedChildren(contentlet, rel, user, respectFrontendRoles, limit,
-                        offset, sortBy).stream()
+                        offset).stream()
+                                .filter(Objects::nonNull)
                         .collect(CollectionsUtils.toImmutableList());
             } else {
-                return getRelatedParents(contentlet, rel, user, respectFrontendRoles, limit, offset,
-                        sortBy).stream()
+                return getRelatedParents(contentlet, rel, user, respectFrontendRoles, limit, offset)
+                        .stream().filter(Objects::nonNull)
                         .collect(CollectionsUtils.toImmutableList());
             }
         } else {
             if (rel.getChildStructureInode().equals(contentlet.getContentTypeId())) {
-                return getRelatedParents(contentlet, rel, user, respectFrontendRoles, limit, offset,
-                        sortBy);
+                return getRelatedParents(contentlet, rel, user, respectFrontendRoles, limit, offset);
             } else {
                 return getRelatedChildren(contentlet, rel, user, respectFrontendRoles, limit,
-                        offset, sortBy);
+                        offset);
             }
         }
     }
 
-    @CloseDBIfOpened
     @Override
-    public List<Contentlet> getRelatedContent(Contentlet contentlet, Relationship rel, User user,
-            boolean respectFrontendRoles) throws DotDataException, DotSecurityException {
-
+    public List<Contentlet> getRelatedContent(final Contentlet contentlet, final Relationship rel, final User user,
+            final boolean respectFrontendRoles) throws DotDataException, DotSecurityException {
         try {
             return getRelatedContent(contentlet, rel, null, user, respectFrontendRoles);
-        } catch (Exception e) {
-            final String errorMessage =
-                    "Unable to look up related content for contentlet with identifier "
-                            + contentlet.getIdentifier() + " and title " + contentlet.getTitle()
-                            + ". Relationship Name: " + rel.getRelationTypeValue();
+        } catch (final Exception e) {
+            final String errorMessage = String.format("Related content for contentlet with " +
+                    "identifier '%s', title '%s', Relationship Name '%s' was not found: %s", contentlet.getIdentifier(), contentlet
+                    .getTitle(), rel.getRelationTypeValue(), e.getMessage());
             if (e instanceof SearchPhaseExecutionException || e
                     .getCause() instanceof SearchPhaseExecutionException) {
                 Logger.warnAndDebug(ESContentletAPIImpl.class,
@@ -1480,29 +1562,56 @@ public class ESContentletAPIImpl implements ContentletAPI {
         }
     }
 
+    /**
+     * Returns the list of child Contentlets related to the specified Contentlet based on a given Relationship.
+     *
+     * @param contentlet           The {@link Contentlet} whose child Contentlets will be retrieved.
+     * @param rel                  The {@link Relationship} used to get the child Contentlets.
+     * @param user                 The {@link User} performing this action.
+     * @param respectFrontendRoles If the User executing this action has the front-end role, or if front-end roles must
+     *                             be validated against this user, set to {@code true}. Otherwise, set to {@code
+     *                             false}.
+     * @param limit                The limit to the amount of results that will be returned.
+     * @param offset               The offset applied to the result, mostly for pagination purposes.
+     *
+     * @return The list of {@link Contentlet} objects that are the children of the specified Contentlet.
+     *
+     * @throws DotSecurityException The user executing this action does not have the required permissions.
+     * @throws DotDataException     An error occurred when interacting with the data source.
+     */
     private List<Contentlet> getRelatedChildren(final Contentlet contentlet, final Relationship rel,
-            final User user, final boolean respectFrontendRoles, int limit, int offset,
-            String sortBy)
+            final User user, final boolean respectFrontendRoles, final int limit, final int offset)
             throws DotSecurityException, DotDataException {
-
-        if (rel.isRelationshipField() && GET_RELATED_CONTENT_FROM_DB){
+        final boolean HAS_PARENT = Boolean.TRUE;
+        final boolean WORKING_VERSION = Boolean.FALSE;
+        if (rel.isRelationshipField() && GET_RELATED_CONTENT_FROM_DB) {
             return FactoryLocator.getRelationshipFactory()
-                    .dbRelatedContent(rel, contentlet, true, false, "tree_order", limit, offset);
-        } else{
+                    .dbRelatedContent(rel, contentlet, HAS_PARENT, WORKING_VERSION, "tree_order", limit, offset);
+        } else {
 
             final List<Contentlet> result = new ArrayList<>();
             final String relationshipName = rel.getRelationTypeValue().toLowerCase();
 
-            SearchResponse response = APILocator.getEsSearchAPI()
-                    .esSearchRelated(contentlet.getIdentifier(), relationshipName, false,false, user,
-                            respectFrontendRoles, limit, offset, sortBy);
+            SearchResponse response;
+            final boolean DONT_PULL_PARENTS = Boolean.FALSE;
+            //Search for related content in existing contentlet
+            if (UtilMethods.isSet(contentlet.getInode())) {
+                response = APILocator.getEsSearchAPI()
+                        .esSearchRelated(contentlet, relationshipName, DONT_PULL_PARENTS, WORKING_VERSION, user,
+                                respectFrontendRoles, limit, offset, null);
+            } else {
+                //Search for related content in other versions of the same contentlet
+                response = APILocator.getEsSearchAPI()
+                        .esSearchRelated(contentlet.getIdentifier(), relationshipName, DONT_PULL_PARENTS, WORKING_VERSION, user,
+                                respectFrontendRoles, limit, offset, null);
+            }
 
             if (response.getHits() == null) {
                 return result;
             }
 
-            for (SearchHit sh : response.getHits()) {
-                Map<String, Object> sourceMap = sh.getSourceAsMap();
+            for (final SearchHit sh : response.getHits()) {
+                final Map<String, Object> sourceMap = sh.getSourceAsMap();
                 if (sourceMap.get(relationshipName) != null) {
                     List<String> relatedIdentifiers = ((ArrayList<String>) sourceMap.get(relationshipName));
 
@@ -1513,10 +1622,17 @@ public class ESContentletAPIImpl implements ContentletAPI {
 
                     relatedIdentifiers.stream().forEach(child -> {
                         try {
-                            result.add(findContentletByIdentifierAnyLanguage(
-                                    child));
-                        } catch (Exception e) {
-                            throw new RuntimeException(e);
+                            final Contentlet mappedContentlet = findContentletByIdentifierAnyLanguage(child, true);
+                            if (null != mappedContentlet && UtilMethods.isSet(mappedContentlet.getIdentifier())) {
+                                result.add(mappedContentlet);
+                            } else {
+                                Logger.warn(this, String.format("Child Contentlet with ID '%s' for relationship '%s' " +
+                                                "was not found. Verify that it exists in the database", child,
+                                        rel.getRelationTypeValue()));
+                            }
+                        } catch (final Exception e) {
+                            throw new RuntimeException(String.format("An error occurred when mapping Child related " +
+                                    "content '%s': %s", child, e.getMessage()), e);
                         }
                     });
                 }
@@ -1526,63 +1642,105 @@ public class ESContentletAPIImpl implements ContentletAPI {
 
     }
 
+    /**
+     * Returns the list of parent Contentlets related to the specified Contentlet based on a given Relationship.
+     *
+     * @param contentlet           The {@link Contentlet} whose parent Contentlets will be retrieved.
+     * @param rel                  The {@link Relationship} used to get the parent Contentlets.
+     * @param user                 The {@link User} performing this action.
+     * @param respectFrontendRoles If the User executing this action has the front-end role, or if front-end roles must
+     *                             be validated against this user, set to {@code true}. Otherwise, set to {@code
+     *                             false}.
+     * @param limit                The limit to the amount of results that will be returned.
+     * @param offset               The offset applied to the result, mostly for pagination purposes.
+     *
+     * @return The list of {@link Contentlet} objects that are the parents of the specified Contentlet.
+     *
+     * @throws DotSecurityException The user executing this action does not have the required permissions.
+     * @throws DotDataException     An error occurred when interacting with the data source.
+     */
     private List<Contentlet> getRelatedParents(final Contentlet contentlet, final Relationship rel,
-            final User user, final boolean respectFrontendRoles, int limit, int offset, String sortBy)
+            final User user, final boolean respectFrontendRoles, final int limit, final int offset)
             throws DotSecurityException, DotDataException {
-
-        if (rel.isRelationshipField() && GET_RELATED_CONTENT_FROM_DB){
+        final boolean HAS_NO_PARENT = Boolean.FALSE;
+        final boolean WORKING_VERSION = Boolean.FALSE;
+        if (rel.isRelationshipField() && GET_RELATED_CONTENT_FROM_DB) {
             return FactoryLocator.getRelationshipFactory()
-                    .dbRelatedContent(rel, contentlet, false, false, "tree_order", limit, offset);
-        } else{
-            final List<Contentlet> result = new ArrayList<>();
+                    .dbRelatedContent(rel, contentlet, HAS_NO_PARENT, WORKING_VERSION, "tree_order", limit, offset);
+        } else {
+            final Map<String, Contentlet> relatedMap = new HashMap<>();
             final String relationshipName = rel.getRelationTypeValue().toLowerCase();
 
-            SearchResponse response = APILocator.getEsSearchAPI()
-                    .esSearchRelated(contentlet.getIdentifier(), relationshipName, true,false, user,
-                            respectFrontendRoles, limit, offset, sortBy);
-
-            if (response.getHits() == null) {
-                return result;
+            SearchResponse response;
+            final boolean PULL_PARENTS = Boolean.TRUE;
+            //Search for related content in existing contentlet
+            if (UtilMethods.isSet(contentlet.getInode())) {
+                response = APILocator.getEsSearchAPI()
+                    .esSearchRelated(contentlet, relationshipName, PULL_PARENTS, WORKING_VERSION, user,
+                            respectFrontendRoles, limit, offset, null);
+            } else {
+                response = APILocator.getEsSearchAPI()
+                        .esSearchRelated(contentlet.getIdentifier(), relationshipName, PULL_PARENTS, WORKING_VERSION, user,
+                                respectFrontendRoles, limit, offset, null);
             }
 
-            for (SearchHit sh : response.getHits()) {
-                Map<String, Object> sourceMap = sh.getSourceAsMap();
-                if (sourceMap.get("identifier") != null) {
-                    result.add(findContentletByIdentifierAnyLanguage(sourceMap.get("identifier").toString()));
+            if (response.getHits() != null) {
+                for (final SearchHit sh : response.getHits()) {
+                    final Map<String, Object> sourceMap = sh.getSourceAsMap();
+                    final String identifier = (String) sourceMap.get("identifier");
+                    if (identifier != null && !relatedMap.containsKey(identifier)) {
+                        final Contentlet mappedContentlet = findContentletByIdentifierAnyLanguage(identifier, true);
+                        if (null != mappedContentlet && UtilMethods.isSet(mappedContentlet.getIdentifier())) {
+                            relatedMap.put(identifier, mappedContentlet);
+                        } else {
+                            Logger.warn(this, String.format("Parent Contentlet with ID '%s' for relationship '%s' was" +
+                                            " not found. Verify that it exists in the database", identifier,
+                                    rel.getRelationTypeValue()));
+                        }
+                    }
                 }
             }
 
-            return result;
+            return new ArrayList<>(relatedMap.values());
         }
+    }
+
+    @Override
+    public List<Contentlet> getRelatedContent(Contentlet contentlet, Relationship rel,
+            Boolean pullByParent, User user, boolean respectFrontendRoles, int limit, int offset,
+            String sortBy) throws DotDataException {
+        return getRelatedContent(contentlet, rel, pullByParent, user, respectFrontendRoles, limit, offset, sortBy, -1, null);
     }
 
     @CloseDBIfOpened
     @Override
-    public List<Contentlet> getRelatedContent(Contentlet contentlet, Relationship rel,
-            Boolean pullByParent, User user, boolean respectFrontendRoles, int limit, int offset,
-            String sortBy)
+    public List<Contentlet> getRelatedContent(final Contentlet contentlet, final Relationship rel,
+            final Boolean pullByParent, final User user, final boolean respectFrontendRoles, final int limit, final int offset,
+            final String sortBy, final long language, final Boolean live)
             throws DotDataException {
+        String fieldVariable = rel.getRelationTypeValue();
         try {
-            String fieldVariable = rel.getRelationTypeValue();
-
-            if(rel.isRelationshipField()){
-                if ((relationshipAPI.sameParentAndChild(rel) && pullByParent!= null && pullByParent) || (relationshipAPI
-                        .isParent(rel, contentlet.getContentType()) && !relationshipAPI.sameParentAndChild(rel))) {
-                    if(rel.getChildRelationName()!= null) {
+            if (rel.isRelationshipField()) {
+                if ((relationshipAPI.sameParentAndChild(rel) && pullByParent != null
+                        && pullByParent) || (relationshipAPI
+                        .isParent(rel, contentlet.getContentType()) && !relationshipAPI
+                        .sameParentAndChild(rel))) {
+                    if (rel.getChildRelationName() != null) {
                         fieldVariable = rel.getChildRelationName();
                     }
-                } else if(rel.getParentRelationName() != null){
+                } else if (rel.getParentRelationName() != null) {
                     fieldVariable = rel.getParentRelationName();
                 }
             }
 
             return getRelatedContent(contentlet, fieldVariable, user, respectFrontendRoles, pullByParent, limit,
-                            offset, sortBy);
-        } catch (Exception e) {
-            final String errorMessage =
-                    "Unable to look up related content for contentlet with identifier "
-                            + contentlet.getIdentifier() + ". Relationship name: " + rel
-                            .getRelationTypeValue();
+                            offset, sortBy, language, live);
+        } catch (final Exception e) {
+            final String id = contentlet!=null ? contentlet.getIdentifier() : "null";
+            final String relName = rel!=null ? rel.getRelationTypeValue() : "null";
+            final String errorMessage = String.format("Unable to look up related content for contentlet with " +
+                    "identifier '%s', Relationship name '%s'(%s): %s", id, relName, fieldVariable, e.getMessage());
+
             if (e instanceof SearchPhaseExecutionException || e
                     .getCause() instanceof SearchPhaseExecutionException) {
                 Logger.warnAndDebug(ESContentletAPIImpl.class,
@@ -1593,7 +1751,15 @@ public class ESContentletAPIImpl implements ContentletAPI {
         }
     }
 
-    @CloseDBIfOpened
+
+    @Override
+    public List<Contentlet> getRelatedContent(Contentlet contentlet, Relationship rel,
+            Boolean pullByParent, User user, boolean respectFrontendRoles, final long language, final Boolean live)
+            throws DotDataException, DotSecurityException {
+        return getRelatedContent(contentlet, rel, pullByParent, user, respectFrontendRoles, -1, -1,
+                null, language, live);
+    }
+
     @Override
     public List<Contentlet> getRelatedContent(Contentlet contentlet, Relationship rel,
             Boolean pullByParent, User user, boolean respectFrontendRoles)
@@ -1614,15 +1780,16 @@ public class ESContentletAPIImpl implements ContentletAPI {
      * @throws DotSecurityException
      */
     @Deprecated
-    public List<Contentlet> getRelatedContentFromIndex(Contentlet contentlet,Relationship rel, boolean pullByParent,
-                                                       User user, boolean respectFrontendRoles)
+    public List<Contentlet> getRelatedContentFromIndex(final Contentlet contentlet, final Relationship rel, final boolean pullByParent,
+                                                       final User user, final boolean respectFrontendRoles)
             throws DotDataException, DotSecurityException {
 
         try {
             return getRelatedContent(contentlet, rel, pullByParent, user, respectFrontendRoles, -1, -1, null);
-        } catch (Exception e){
-            final String errorMessage = "Unable to look up related content for contentlet with identifier "
-                    + contentlet.getIdentifier() + ". Relationship Name: " + rel.getRelationTypeValue();
+        } catch (final Exception e) {
+            final String errorMessage = String.format("Unable to look up related content for contentlet from Index " +
+                    "with identifier '%s', Relationship Name '%s': %s", contentlet.getIdentifier(), rel.getRelationTypeValue
+                    (), e.getMessage());
             if (e instanceof SearchPhaseExecutionException || e
                     .getCause() instanceof SearchPhaseExecutionException) {
                 Logger.warnAndDebug(ESContentletAPIImpl.class, errorMessage + ". An empty list will be returned", e);
@@ -1632,17 +1799,96 @@ public class ESContentletAPIImpl implements ContentletAPI {
         }
     }
 
+    /**
+     * check if a workflow may be run instead of the delete api call itself.
+     * @param contentletIn
+     * @param user
+     * @param respectFrontendRoles
+     * @return Optional boolean, present if the workflow ran with a result of the delete operation.
+     * @throws DotSecurityException
+     * @throws DotDataException
+     */
+    private Optional<Boolean> checkAndRunDeleteAsWorkflow(final Contentlet contentletIn, final User user,
+            final boolean respectFrontendRoles) throws DotSecurityException, DotDataException {
+
+        // if already on workflow or has an actionid skip this method.
+        if (this.isDisableWorkflow(contentletIn)
+                || this.isWorkflowInProgress(contentletIn)
+                || this.isInvalidContentTypeForWorkflow(contentletIn)
+                || UtilMethods.isSet(contentletIn.getActionId())) {
+
+            return Optional.empty();
+        }
+
+        final WorkflowAPI workflowAPI = APILocator.getWorkflowAPI();
+        final Optional<WorkflowAction> workflowActionOpt =
+                workflowAPI.findActionMappedBySystemActionContentlet
+                        (contentletIn, SystemAction.DELETE, user);
+
+        if (workflowActionOpt.isPresent()) {
+
+            final String title    = contentletIn.getTitle();
+            final String actionId = workflowActionOpt.get().getId();
+
+            // if the default action is in the avalable actions for the content.
+            if (!isDefaultActionOnAvailableActions(contentletIn, user, workflowAPI, actionId)) {
+                return Optional.empty();
+            }
+
+            Logger.info(this, () -> "The contentlet: " + contentletIn.getIdentifier() + " hasn't action id set"
+                    + " using the default action: " + actionId);
+
+            // if the action has a save action, we skip the current checkin
+            if (workflowActionOpt.get().hasDeleteActionlet()) {
+
+                Logger.info(this, () -> "The action: " + actionId + " has a delete contentlet actionlet"
+                        + " so firing a workflow and skipping the current delete for the contentlet: " + contentletIn.getIdentifier());
+
+                contentletIn.setActionId(actionId);
+                contentletIn.setProperty(Contentlet.WORKFLOW_IN_PROGRESS, Boolean.TRUE);
+
+                final WorkflowProcessor processor = workflowAPI.fireWorkflowPreCheckin(contentletIn, user);
+                workflowAPI.fireWorkflowPostCheckin(processor);
+                if (processor.getContextMap().containsKey("deleted")) {
+
+                    return Optional.ofNullable((Boolean)processor.getContextMap().get("deleted"));
+                }
+
+                return Optional.ofNullable(false);
+            }
+
+            Logger.info(this, () -> "The action: " + contentletIn.getIdentifier() + " hasn't a delete contentlet actionlet"
+                    + " so including just the action to the contentlet: " + title);
+
+            contentletIn.setActionId(actionId);
+        }
+
+        return Optional.empty();
+    }
+
     @Override
     public boolean delete(final Contentlet contentlet, final User user, final boolean respectFrontendRoles) throws DotDataException,DotSecurityException {
+
+        final Optional<Boolean> deleteOpt = this.checkAndRunDeleteAsWorkflow(contentlet, user, respectFrontendRoles);
+        if (deleteOpt.isPresent()) {
+
+            Logger.info(this, "A Workflow has been ran instead of delete the contentlet: " +
+                    contentlet.getIdentifier());
+
+            return deleteOpt.get();
+        }
+
         boolean deleted = false;
-        final List<Contentlet> contentlets = new ArrayList<Contentlet>();
+        final List<Contentlet> contentlets = new ArrayList<>();
         contentlets.add(contentlet);
 
         try {
+
             deleted = delete(contentlets, user, respectFrontendRoles);
             HibernateUtil.addCommitListener
                     (()-> this.localSystemEventsAPI.notify(new ContentletDeletedEvent(contentlet, user)));
         } catch(DotDataException | DotSecurityException e) {
+
             logContentletActivity(contentlets, "Error Deleting Content", user);
             throw e;
         }
@@ -1653,11 +1899,12 @@ public class ESContentletAPIImpl implements ContentletAPI {
     @Override
     public boolean delete(final Contentlet contentlet, final User user, final boolean respectFrontendRoles, final boolean allVersions) throws DotDataException,DotSecurityException {
 
-        final List<Contentlet> contentlets = new ArrayList<Contentlet>();
+        final List<Contentlet> contentlets = new ArrayList<>();
         contentlets.add(contentlet);
 
         try {
-            delete(contentlets, user, respectFrontendRoles, allVersions);
+
+            this.delete(contentlets, user, respectFrontendRoles, allVersions);
             HibernateUtil.addCommitListener
                     (()-> this.localSystemEventsAPI.notify(new ContentletDeletedEvent(contentlet, user)));
         } catch(DotDataException | DotSecurityException e) {
@@ -1674,7 +1921,7 @@ public class ESContentletAPIImpl implements ContentletAPI {
     public boolean deleteByHost(final Host host, final User user, final boolean respectFrontendRoles)
             throws DotDataException, DotSecurityException {
 
-        
+
         final DotConnect db = new DotConnect();
 
         List<String> deleteMe = db.setSQL("select working_inode  from identifier, contentlet_version_info where identifier.id = contentlet_version_info.identifier and host_inode=? and asset_type='contentlet'")
@@ -1690,11 +1937,11 @@ public class ESContentletAPIImpl implements ContentletAPI {
             LocalTransaction.wrapNoException(() ->{
 
                 try {
-                    
+
                     List<Contentlet> cons = findContentlets(ids);
-                    
+
                     destroy(cons, user, respectFrontendRoles);
-                    
+
                 } catch (DotSecurityException e1) {
                     throw new DotStateException(e1);
                 }
@@ -1714,48 +1961,224 @@ public class ESContentletAPIImpl implements ContentletAPI {
 
     @WrapInTransaction
     @Override
-    public boolean delete(List<Contentlet> contentlets, User user, boolean respectFrontendRoles)
+    public boolean delete(final List<Contentlet> contentlets, final User user, final boolean respectFrontendRoles)
             throws DotDataException, DotSecurityException {
+
         return deleteContentlets(contentlets, user, respectFrontendRoles, false);
     }
 
+    /**
+     * check if a workflow may be run instead of the destroy api call itself.
+     * @param contentletIn
+     * @param user
+     * @param respectFrontendRoles
+     * @return Optional boolean, present if the workflow ran with a result of the delete operation.
+     * @throws DotSecurityException
+     * @throws DotDataException
+     */
+    private Optional<Boolean> checkAndRunDestroyAsWorkflow(final Contentlet contentletIn, final User user,
+            final boolean respectFrontendRoles) throws DotSecurityException, DotDataException {
+
+        // if already on workflow or has an actionid skip this method.
+        if (this.isDisableWorkflow(contentletIn)
+                || this.isWorkflowInProgress(contentletIn)
+                || this.isInvalidContentTypeForWorkflow(contentletIn)
+                || UtilMethods.isSet(contentletIn.getActionId())) {
+
+            return Optional.empty();
+        }
+
+        final WorkflowAPI workflowAPI = APILocator.getWorkflowAPI();
+        final Optional<WorkflowAction> workflowActionOpt =
+                workflowAPI.findActionMappedBySystemActionContentlet
+                        (contentletIn, SystemAction.DESTROY, user);
+
+        if (workflowActionOpt.isPresent()) {
+
+            final String title    = contentletIn.getTitle();
+            final String actionId = workflowActionOpt.get().getId();
+
+            // if the default action is in the avalable actions for the content.
+            if (!isDefaultActionOnAvailableActions(contentletIn, user, workflowAPI, actionId)) {
+                return Optional.empty();
+            }
+
+            Logger.info(this, () -> "The contentlet: " + contentletIn.getIdentifier() + " hasn't action id set"
+                    + " using the default action: " + actionId);
+
+            // if the action has a destroy action, we skip the current checkin
+            if (workflowActionOpt.get().hasDestroyActionlet()) {
+
+                Logger.info(this, () -> "The action: " + actionId + " has a destroy contentlet actionlet"
+                        + " so firing a workflow and skipping the current destroy for the contentlet: " + contentletIn.getIdentifier());
+
+                contentletIn.setActionId(actionId);
+                contentletIn.setProperty(Contentlet.WORKFLOW_IN_PROGRESS, Boolean.TRUE);
+
+                final WorkflowProcessor processor = workflowAPI.fireWorkflowPreCheckin(contentletIn, user);
+                workflowAPI.fireWorkflowPostCheckin(processor);
+                if (processor.getContextMap().containsKey("destroy")) {
+
+                    return Optional.ofNullable((Boolean)processor.getContextMap().get("destroy"));
+                }
+
+                return Optional.ofNullable(false);
+            }
+
+            Logger.info(this, () -> "The action: " + contentletIn.getIdentifier() + " hasn't a destroy contentlet actionlet"
+                    + " so including just the action to the contentlet: " + title);
+
+            contentletIn.setActionId(actionId);
+        }
+
+        return Optional.empty();
+    }
+
     @Override
-    public boolean destroy(Contentlet contentlet, User user,boolean respectFrontendRoles) throws DotDataException,DotSecurityException {
-        List<Contentlet> contentlets = new ArrayList<Contentlet>();
+    public boolean destroy(final Contentlet contentlet, final User user, final boolean respectFrontendRoles) throws DotDataException,DotSecurityException {
+
+        final Optional<Boolean> deleteOpt = this.checkAndRunDestroyAsWorkflow(contentlet, user, respectFrontendRoles);
+        if (deleteOpt.isPresent()) {
+
+            Logger.info(this, "A Workflow has been ran instead of destroy the contentlet: " +
+                    contentlet.getIdentifier());
+
+            return deleteOpt.get();
+        }
+
+        final List<Contentlet> contentlets = new ArrayList<>();
         contentlets.add(contentlet);
         try {
-            return destroy(contentlets, user, respectFrontendRoles);
+            
+            return this.destroy(contentlets, user, respectFrontendRoles);
         } catch(DotDataException | DotSecurityException e) {
-            logContentletActivity(contentlets, "Error Destroying Content", user);
+            
+            this.logContentletActivity(contentlets, "Error Destroying Content", user);
             throw e;
         }
     }
 
     @WrapInTransaction
     @Override
-    public boolean destroy(List<Contentlet> contentlets, User user, boolean respectFrontendRoles) throws DotDataException,
+    public boolean destroy(final List<Contentlet> contentlets, final User user, final boolean respectFrontendRoles) throws DotDataException,
             DotSecurityException {
+
+        boolean destroyed = false;
+
         if (contentlets == null || contentlets.size() == 0) {
+            
             Logger.info(this, "No contents passed to delete so returning");
             return false;
         }
-        logContentletActivity(contentlets, "Destroying Content", user);
-        for (Contentlet contentlet : contentlets) {
-            if (contentlet.getInode().equals("")) {
-                logContentletActivity(contentlet, "Error Destroying Content", user);
+
+        final List<Contentlet> contentletsToDelete = new ArrayList<>();
+        for (final Contentlet contentlet : contentlets) {
+
+            final Optional<Boolean> deleteOpt = this.checkAndRunDestroyAsWorkflow(contentlet, user, respectFrontendRoles);
+            if (!deleteOpt.isPresent()) {
+
+                contentletsToDelete.add(contentlet);
+            } else {
+
+                Logger.info(this, "A Workflow has been ran instead of destroy the contentlet: " +
+                        contentlet.getIdentifier());
+                destroyed |= deleteOpt.get();
+            }
+        }
+
+        return  !contentletsToDelete.isEmpty()?
+             this.internalDestroy(contentletsToDelete, user, respectFrontendRoles):destroyed;
+    }
+
+    private boolean internalDestroy (final List<Contentlet> contentlets, final User user, final boolean respectFrontendRoles) throws DotSecurityException, DotDataException {
+
+        this.logContentletActivity(contentlets, "Destroying Content", user);
+
+        for (final Contentlet contentlet : contentlets) {
+
+            if (StringPool.BLANK.equals(contentlet.getInode())) {
+
+                this.logContentletActivity(contentlet, "Error Destroying Content", user);
                 throw new DotContentletStateException(CAN_T_CHANGE_STATE_OF_CHECKED_OUT_CONTENT);
             }
-            canLock(contentlet, user);
+
+            final boolean bringOldVersions  = false;  // we do not want old version in order to be more efficient
+            final List<Contentlet> versions =  this.findAllVersions(APILocator.getIdentifierAPI().find(contentlet.getIdentifier()), bringOldVersions,
+                    user, respectFrontendRoles);
+
+            for (final Contentlet version : versions) {
+                this.canLock(version, user);
+            }
         }
-        List<Contentlet> perCons = permissionAPI.filterCollection(contentlets, PermissionAPI.PERMISSION_PUBLISH,
+
+        final List<Contentlet> filterContentlets = this.permissionAPI.filterCollection(contentlets, PermissionAPI.PERMISSION_PUBLISH,
                 respectFrontendRoles, user);
 
-        if (perCons.size() != contentlets.size()) {
-            logContentletActivity(contentlets, "Error Destroying Content", user);
+        if (filterContentlets.size() != contentlets.size()) {
+
+            this.logContentletActivity(contentlets, "Error Destroying Content", user);
             throw new DotSecurityException("User: " + (user != null ? user.getUserId() : "Unknown")
                     + " does not have permission to destroy some or all of the contentlets");
         }
-        return destroyContentlets(contentlets, user, respectFrontendRoles);
+
+        return this.destroyContentlets(contentlets, user, respectFrontendRoles);
+    }
+
+    private void forceUnpublishArchive (final Contentlet contentlet, final User user)
+            throws DotSecurityException, DotDataException {
+
+        // Force unpublishing and archiving the contentlet
+        try{
+            if (contentlet.isLive()) {
+                unpublish(contentlet, user, false, 0);
+            }
+            if (!contentlet.isArchived()) {
+                archive(contentlet, user, false, true);
+            }
+        }
+        // make destroy more robust if we cannot find ContentletVersionInfo
+        // keep going
+        catch(DotStateException e){
+            Logger.debug(this, e.getMessage());
+        }
+    }
+
+    private void deleteRelationships(final Contentlet contentlet, final User user, final boolean respectFrontendRoles)
+            throws DotSecurityException, DotDataException {
+
+        final List<Relationship> relationships =
+                FactoryLocator.getRelationshipFactory().byContentType(contentlet.getStructure());
+        // Remove related contents
+        for (final Relationship relationship : relationships) {
+            deleteRelatedContent(contentlet, relationship, user, respectFrontendRoles);
+        }
+    }
+
+    private void deleteMultitrees(final Contentlet contentlet, final User user) throws DotDataException, DotSecurityException {
+
+        final List<MultiTree> multiTrees = APILocator.getMultiTreeAPI().getMultiTreesByChild(contentlet.getIdentifier());
+
+        for (final MultiTree multiTree : multiTrees) {
+
+            final Identifier pageIdentifier = APILocator.getIdentifierAPI().find(multiTree.getHtmlPage());
+            if (pageIdentifier != null && UtilMethods.isSet(pageIdentifier.getInode())) {
+
+                try {
+
+                    final IHTMLPage page = loadPageByIdentifier(pageIdentifier.getId(),
+                            false, contentlet.getLanguageId(), user, false);
+                    if (page != null && UtilMethods.isSet(page.getIdentifier())) {
+
+                        new PageLoader().invalidate(page);
+                    }
+                } catch(DotStateException dcse) {
+
+                    Logger.warn(this.getClass(), "Page with id:" +pageIdentifier.getId() +" does not exist" );
+                }
+            }
+
+            APILocator.getMultiTreeAPI().deleteMultiTree(multiTree);
+        }
     }
 
     /**
@@ -1778,128 +2201,89 @@ public class ESContentletAPIImpl implements ContentletAPI {
      *             The specified user does not have the required permissions to
      *             perform this action.
      */
-    private boolean destroyContentlets(List<Contentlet> contentlets, User user, boolean respectFrontendRoles)
+    private boolean destroyContentlets(final List<Contentlet> contentlets, final User user, final boolean respectFrontendRoles)
             throws DotDataException, DotSecurityException {
+
         boolean noErrors = true;
-        List<Contentlet> contentletsVersion = new ArrayList<Contentlet>();
+        final List<Contentlet> contentletsVersion     = new ArrayList<>();
         // Log contentlet identifiers that we are going to destroy
-        HashSet<String> l = new HashSet<String>();
-        for (Contentlet contentlet : contentlets) {
+        AdminLogger.log(this.getClass(), "destroy",
+                "User trying to destroy the following contents: " +
+                        contentlets.stream().map(Contentlet::getIdentifier).collect(Collectors.toSet()), user);
+        final Iterator<Contentlet> contentletIterator = contentlets.iterator();
+        while (contentletIterator.hasNext()) {
 
-            l.add(contentlet.getIdentifier());
-        }
-        AdminLogger.log(this.getClass(), "destroy", "User trying to destroy the following contents: " + l.toString(), user);
-        Iterator<Contentlet> itr = contentlets.iterator();
-        while (itr.hasNext()) {
-            Contentlet con = itr.next();
-            con.getMap().put(Contentlet.DONT_VALIDATE_ME, true);
+            final Contentlet contentlet = contentletIterator.next();
+            contentlet.getMap().put(Contentlet.DONT_VALIDATE_ME, true);
+            this.forceUnpublishArchiveOnDestroy(user, contentlet);
+            APILocator.getWorkflowAPI().deleteWorkflowTaskByContentletIdAnyLanguage(contentlet, user);
 
-            // Force unpublishing and archiving the contentlet
-            try{
-                if (con.isLive()) {
-                    unpublish(con, user, 0);
-                }
-                if (!con.isArchived()) {
-                    archive(con, user, false, true);
-                }
-            }
-            // make destroy more robust if we cannot find ContentletVersionInfo
-            // keep going
-            catch(DotStateException e){
-                Logger.debug(this, e.getMessage());
-            }
             // Remove Rules with this contentlet as Parent.
             try {
-                APILocator.getRulesAPI().deleteRulesByParent(con, user, respectFrontendRoles);
+
+                APILocator.getRulesAPI().deleteRulesByParent(contentlet, user, respectFrontendRoles);
             } catch (InvalidLicenseException ilexp) {
+
                 Logger.warn(this, "An enterprise license is required to delete rules under pages.");
             }
+
             // Remove category associations
-            categoryAPI.removeChildren(con, APILocator.getUserAPI().getSystemUser(), true);
-            categoryAPI.removeParents(con, APILocator.getUserAPI().getSystemUser(), true);
-            List<Relationship> rels = FactoryLocator.getRelationshipFactory().byContentType(con.getStructure());
-            // Remove related contents
-            for (Relationship relationship : rels) {
-                deleteRelatedContent(con, relationship, user, respectFrontendRoles);
-            }
-            contentletsVersion.addAll(findAllVersions(APILocator.getIdentifierAPI().find(con.getIdentifier()), user,
+            this.categoryAPI.removeChildren(contentlet, APILocator.getUserAPI().getSystemUser(), true);
+            this.categoryAPI.removeParents(contentlet, APILocator.getUserAPI().getSystemUser(), true);
+            this.deleteRelationships(contentlet, user, respectFrontendRoles);
+
+            contentletsVersion.addAll(findAllVersions(APILocator.getIdentifierAPI().find(contentlet.getIdentifier()), user,
                     respectFrontendRoles));
+            contentletsVersion.forEach(contentletLanguage -> contentletLanguage.setIndexPolicy(contentlet.getIndexPolicy()));
             // Remove page contents (if the content is a Content Page)
-            List<MultiTree> mts = APILocator.getMultiTreeAPI().getMultiTreesByChild(con.getIdentifier());
-
-            for (MultiTree mt : mts) {
-                Identifier pageIdent = APILocator.getIdentifierAPI().find(mt.getParent1());
-                if (pageIdent != null && UtilMethods.isSet(pageIdent.getInode())) {
-                    try {
-                    IHTMLPage page = loadPageByIdentifier(pageIdent.getId(), false, con.getLanguageId(), user, false);
-                    if (page != null && UtilMethods.isSet(page.getIdentifier()))
-                        new PageLoader().invalidate(page);
-                    }
-                    catch(DotStateException dcse) {
-                        Logger.warn(this.getClass(), "Page with id:" +pageIdent.getId() +" does not exist" );
-                    }
-                }
-                APILocator.getMultiTreeAPI().deleteMultiTree(mt);
-            }
-            logContentletActivity(con, "Content Destroyed", user);
+            this.deleteMultitrees(contentlet, user);
+            this.logContentletActivity(contentlet, "Content Destroyed", user);
         }
-        if (contentlets.size() > 0) {
-            XStream _xstream = new XStream(new DomDriver());
-            File backupFolder = new File(backupPath);
-            if (!backupFolder.exists()) {
-                backupFolder.mkdirs();
-            }
-            for (Contentlet cont : contentlets) {
-                Structure st = cont.getStructure();
-                List<Field> fields = st.getFields();
-                List<File> filelist = new ArrayList<File>();
 
-                File file = null;
-                for (Field field : fields) {
-                    if (field.getFieldType().equals(Field.FieldType.BINARY.toString())) {
-                        try {
-                            file = getBinaryFile(cont.getInode(), field.getVelocityVarName(), user);
-                        } catch (Exception ex) {
-                            Logger.debug(this, ex.getMessage(), ex);
-                        }
-                        if (file != null) {
-                            filelist.add(file);
+        this.backupDestroyedContentlets(contentlets, user);
 
-                        }
-                    }
-                }
-                
-               File papa =  new File(backupPath + File.separator
-                    + cont.getIdentifier());
-               papa.mkdirs();
-                  File _writingwbin = new File(papa,  cont.getIdentifier().toString()  + ".xml");
-
-                  try (BufferedOutputStream _bout = new BufferedOutputStream(Files.newOutputStream(_writingwbin.toPath()))) {
-                    _xstream.toXML(cont, _bout);
-                    for(File f : filelist){
-                      File child = new File(papa, f.getName());
-                      FileUtil.move(f,child );
-                    }
-                  } catch (IOException e) {
-                      Logger.error(this,
-                              "Error processing the file for contentlet with Identifier: " + cont.getIdentifier(), e);
-                  }
-            }
-        }
         // Delete all the versions of the contentlets to delete
-        contentFactory.delete(contentletsVersion);
+        this.contentFactory.delete(contentletsVersion);
         // Remove the contentlets from the Elastic index and cache
-        for (Contentlet contentlet : contentlets) {
-            indexAPI.removeContentFromIndex(contentlet);
+        for (final Contentlet contentlet : contentletsVersion) {
+
             CacheLocator.getIdentifierCache().removeFromCacheByVersionable(contentlet);
         }
-        for (Contentlet contentlet : contentletsVersion) {
-            indexAPI.removeContentFromIndex(contentlet);
-            CacheLocator.getIdentifierCache().removeFromCacheByVersionable(contentlet);
+
+        this.deleteBinaryFiles(contentletsVersion, null);
+        this.deleteElementFromPublishQueueTable(contentlets);
+
+        return noErrors;
+    }
+
+    private void forceUnpublishArchiveOnDestroy(final User user, final Contentlet contentlet)
+            throws DotSecurityException, DotDataException {
+
+        // it could be into a step, so we do not want to move.
+        final Optional<Boolean> disableWorkflowOpt = this.getDisableWorkflow (contentlet);
+        contentlet.getMap().put(Contentlet.DISABLE_WORKFLOW, true);
+        this.forceUnpublishArchive(contentlet, user);
+
+        contentlet.getMap().put(Contentlet.DISABLE_WORKFLOW, disableWorkflowOpt.isPresent()?
+                disableWorkflowOpt.get(): null);
+    }
+
+    private Optional<Boolean> getDisableWorkflow(final Contentlet contentlet) {
+
+        if (!contentlet.getMap().containsKey(Contentlet.DISABLE_WORKFLOW)) {
+
+            return Optional.empty();
         }
-        deleteBinaryFiles(contentletsVersion, null);
-        for (Contentlet contentlet : contentlets) {
+
+        return Optional.ofNullable((boolean)contentlet.getMap().get(Contentlet.DISABLE_WORKFLOW));
+    }
+
+    private void deleteElementFromPublishQueueTable(final List<Contentlet> contentlets) {
+
+        for (final Contentlet contentlet : contentlets) {
+
             try {
+
                 PublisherAPI.getInstance().deleteElementFromPublishQueueTable(contentlet.getIdentifier());
             } catch (DotPublisherException e) {
                 Logger.error(getClass(),
@@ -1909,8 +2293,65 @@ public class ESContentletAPIImpl implements ContentletAPI {
                         e);
             }
         }
-        return noErrors;
     }
+
+    private void backupDestroyedContentlets(final List<Contentlet> contentlets, final User user) {
+
+        if (contentlets.size() > 0) {
+
+            final XStream xstream = new XStream(new DomDriver());
+            final File backupFolder = new File(backupPath);
+            if (!backupFolder.exists()) {
+
+                backupFolder.mkdirs();
+            }
+
+            for (final Contentlet contentlet : contentlets) {
+
+                final Structure structure = contentlet.getStructure();
+                final List<Field> fields  = structure.getFields();
+                final List<File> filelist = new ArrayList<>();
+
+                File file = null;
+                for (final Field field : fields) {
+
+                    if (field.getFieldType().equals(FieldType.BINARY.toString())) {
+                        try {
+
+                            file = getBinaryFile(contentlet.getInode(), field.getVelocityVarName(), user);
+                        } catch (Exception ex) {
+                            Logger.debug(this, ex.getMessage(), ex);
+                        }
+
+                        if (file != null) {
+
+                            filelist.add(file);
+                        }
+                    }
+                }
+
+               final File filePath =  new File(backupPath + File.separator
+                    + contentlet.getIdentifier());
+               filePath.mkdirs();
+
+               final File _writingwbin = new File(filePath,  contentlet.getIdentifier().toString()  + ".xml");
+
+               try (BufferedOutputStream bufferedOutputStream = new BufferedOutputStream
+                      (Files.newOutputStream(_writingwbin.toPath()))) {
+
+                   xstream.toXML(contentlet, bufferedOutputStream);
+                   for(final File fileChild : filelist) {
+
+                       final File child = new File(filePath, fileChild.getName());
+                       FileUtil.move(fileChild,child );
+                   }
+               } catch (IOException e) {
+                   Logger.error(this,
+                          "Error processing the file for contentlet with Identifier: " + contentlet.getIdentifier(), e);
+               }
+            }
+        }
+    } // backupDestroyedContentlets.
 
     /**
      * Deletes the specified list of {@link Contentlet} objects ONLY in the
@@ -1939,108 +2380,146 @@ public class ESContentletAPIImpl implements ContentletAPI {
      * @throws DotStateException
      *             One of the specified contentlets is not archived.
      */
-    private boolean deleteContentlets(List<Contentlet> contentlets, User user,
-                                      boolean respectFrontendRoles, boolean isDeletingAHost) throws DotDataException,
+    private boolean deleteContentlets(final List<Contentlet> contentlets, final User user,
+                                      final boolean respectFrontendRoles, final boolean isDeletingAHost) throws DotDataException,
             DotSecurityException {
 
         boolean noErrors = true;
 
-        if(contentlets == null || contentlets.size() == 0){
+        if(contentlets == null || contentlets.size() == 0) {
+
             Logger.info(this, "No contents passed to delete so returning");
             noErrors = false;
             return noErrors;
         }
-        logContentletActivity(contentlets, "Deleting Content", user);
-        for (Contentlet contentlet : contentlets){
-            if(!contentlet.isArchived() && contentlet.validateMe()){
+
+        this.logContentletActivity(contentlets, "Deleting Content", user);
+
+        final List<Contentlet> filteredContentlets = this.validateAndFilterContentletsToDelete(
+                contentlets, user, respectFrontendRoles);
+
+        if(filteredContentlets.size() != contentlets.size()) {
+
+            this.logContentletActivity(contentlets, "Error Deleting Content", user);
+            throw new DotSecurityException("User: "+ (user != null ? user.getUserId() : "Unknown")
+                    +" does not have permission to delete some or all of the contentlets");
+        }
+
+        // Log contentlet identifiers that we are going to delete
+        final HashSet<String> contentletIdentifiers   = new HashSet<>();
+        for (final Contentlet contentlet : contentlets) {
+
+            contentletIdentifiers.add(contentlet.getIdentifier());
+        }
+
+        AdminLogger.log(this.getClass(), "delete", "User trying to delete the following contents: " +
+                contentletIdentifiers.toString(), user);
+
+        final HashSet<String> deletedIdentifiers      = new HashSet();
+        final Iterator<Contentlet> contentletIterator = filteredContentlets.iterator();
+        while (contentletIterator.hasNext()) {
+
+            this.deleteContentlet(contentlets, user, isDeletingAHost,
+                    deletedIdentifiers, contentletIterator.next());
+        }
+
+        return noErrors;
+    }
+
+    private void deleteContentlet(final List<Contentlet> contentlets, final User user, final boolean isDeletingAHost,
+            final HashSet<String> deletedIdentifiers, final Contentlet contentletToDelete)
+            throws DotDataException, DotSecurityException {
+
+        //If we are deleting a Site/Host, we can call directly the destroy method.
+        //No need to validate anything.
+        if (isDeletingAHost) {
+            //We need to make sure that we only destroy a identifier once.
+            //If the contentlet has several languages we could send same identifier several times.
+            if(!deletedIdentifiers.contains(contentletToDelete.getIdentifier())) {
+
+                contentletToDelete.setProperty(Contentlet.DONT_VALIDATE_ME, true);
+                this.destroyContentlets(Lists.newArrayList(contentletToDelete), user, false);
+            }
+        } else {
+
+            if (contentletToDelete.isHTMLPage()) {
+
+                unlinkRelatedContentType(user, contentletToDelete);
+            }
+
+            //If we are not deleting a site, the course of action will depend
+            // on the amount of languages of each contentlet.
+
+            // Find all multi-language working contentlets
+            final List<Contentlet> otherLanguageCons = this.contentFactory.getContentletsByIdentifier(contentletToDelete.getIdentifier());
+            if (otherLanguageCons.size() == 1) {
+
+                this.destroyContentlets(Lists.newArrayList(contentletToDelete), user, false);
+            } else if (otherLanguageCons.size() > 1) {
+
+                if(!contentletToDelete.isArchived() && contentletToDelete.getMap().get(Contentlet.DONT_VALIDATE_ME) == null) {
+
+                    this.logContentletActivity(contentletToDelete, "Error Deleting Content", user);
+                    final String errorMsg = "Contentlet with Inode " + contentletToDelete.getInode()
+                            + " cannot be deleted because it's not archived. Please archive it first before deleting it.";
+                    Logger.error(this, errorMsg);
+                    APILocator
+                            .getNotificationAPI().generateNotification(errorMsg, NotificationLevel.INFO, user.getUserId());
+                    throw new DotStateException(errorMsg);
+                }
+
+                //TODO we still have several things that need cleaning here:
+                //TODO https://github.com/dotCMS/core/issues/9146
+                final Identifier identifier                      = APILocator.getIdentifierAPI().find(contentletToDelete.getIdentifier());
+                final List<Contentlet> allVersionsList           = this.findAllVersions(identifier, user,false);
+                final List <Contentlet> contentletsLanguageList  = allVersionsList.stream().
+                        filter(contentlet -> contentlet.getLanguageId() == contentletToDelete.getLanguageId())
+                        .collect(Collectors.toList());
+                contentletsLanguageList.forEach(contentletLanguage -> contentletLanguage.setIndexPolicy(contentletToDelete.getIndexPolicy()));
+                this.contentFactory.delete(contentletsLanguageList, false);
+
+                for (final Contentlet contentlet : contentlets) {
+
+                    try {
+
+                        PublisherAPI.getInstance().deleteElementFromPublishQueueTable(contentlet.getIdentifier(),
+                                contentlet.getLanguageId());
+                    } catch (DotPublisherException e) {
+
+                        Logger.error(getClass(), "Error deleting Contentlet from Publishing Queue with Identifier: " + contentlet.getIdentifier());
+                        Logger.debug(getClass(), "Error deleting Contentlet from Publishing Queue with Identifier: " + contentlet.getIdentifier(), e);
+                    }
+                }
+            }
+        }
+
+        deletedIdentifiers.add(contentletToDelete.getIdentifier());
+        this.sendDeleteEvent(contentletToDelete);
+    }
+
+    private List<Contentlet> validateAndFilterContentletsToDelete(final List<Contentlet> contentlets,
+            final User user, final boolean respectFrontendRoles) throws DotDataException, DotSecurityException {
+
+        for (final Contentlet contentlet : contentlets) {
+
+            if(!contentlet.isArchived() && contentlet.validateMe()) {
+
                 throw new DotContentletStateException(
                     getLocalizedMessageOrDefault(user, "Failed-to-delete-unarchived-content", FAILED_TO_DELETE_UNARCHIVED_CONTENT, getClass())
                 );
             }
 
             if(contentlet.getInode().equals("")) {
+
                 logContentletActivity(contentlet, "Error Deleting Content", user);
                 throw new DotContentletStateException(CAN_T_CHANGE_STATE_OF_CHECKED_OUT_CONTENT);
             }
-            canLock(contentlet, user);
-        }
-        List<Contentlet> perCons = permissionAPI.filterCollection(contentlets, PermissionAPI.PERMISSION_PUBLISH, respectFrontendRoles, user);
 
-        if(perCons.size() != contentlets.size()){
-            logContentletActivity(contentlets, "Error Deleting Content", user);
-            throw new DotSecurityException("User: "+ (user != null ? user.getUserId() : "Unknown")
-                    +" does not have permission to delete some or all of the contentlets");
+            this.canLock(contentlet, user);
         }
 
-        // Log contentlet identifiers that we are going to delete
-        HashSet<String> l = new HashSet();
-        for (Contentlet contentlet : contentlets) {
-            l.add(contentlet.getIdentifier());
-        }
-        AdminLogger.log(this.getClass(), "delete", "User trying to delete the following contents: " + l.toString(), user);
-
-        HashSet<String> deletedIdentifiers = new HashSet();
-
-        Iterator<Contentlet> itr = perCons.iterator();
-        while( itr.hasNext() ) {
-            final Contentlet con = itr.next();
-
-            //If we are deleting a Site/Host, we can call directly the destroy method.
-            //No need to validate anything.
-            if ( isDeletingAHost ) {
-                //We need to make sure that we only destroy a identifier once.
-                //If the contentlet has several languages we could send same identifier several times.
-                if( !deletedIdentifiers.contains(con.getIdentifier()) ){
-                    con.setProperty(Contentlet.DONT_VALIDATE_ME, true);
-                    destroyContentlets(Lists.newArrayList(con), user, false);
-                }
-            } else {
-
-                if (con.isHTMLPage()){
-                    unlinkRelatedContentType(user, con);
-                }
-
-                //If we are not deleting a site, the course of action will depend
-                // on the amount of languages of each contentlet.
-
-                // Find all multi-language working contentlets
-                List<Contentlet> otherLanguageCons = contentFactory.getContentletsByIdentifier(con.getIdentifier());
-                if (otherLanguageCons.size() == 1) {
-                    destroyContentlets(Lists.newArrayList(con), user, false);
-
-                } else if (otherLanguageCons.size() > 1) {
-                    if(!con.isArchived() && con.getMap().get(Contentlet.DONT_VALIDATE_ME) == null){
-                        logContentletActivity(con, "Error Deleting Content", user);
-                        String errorMsg = "Contentlet with Inode " + con.getInode()
-                                + " cannot be deleted because it's not archived. Please archive it first before deleting it.";
-                        Logger.error(this, errorMsg);
-                        APILocator.getNotificationAPI().generateNotification(errorMsg, NotificationLevel.INFO, user.getUserId());
-                        throw new DotStateException(errorMsg);
-                    }
-                    //TODO we still have several things that need cleaning here:
-                    //TODO https://github.com/dotCMS/core/issues/9146
-                    Identifier identifier = APILocator.getIdentifierAPI().find(con.getIdentifier());
-                    List<Contentlet> allVersionsList = findAllVersions(identifier,user,false);
-                    List <Contentlet> contentletsLanguageList  = allVersionsList.stream().
-                            filter(contentlet -> contentlet.getLanguageId()==con.getLanguageId()).collect(Collectors.toList());
-                    contentFactory.delete(contentletsLanguageList, false);
-
-                    for (Contentlet contentlet : contentlets) {
-                        try {
-                            PublisherAPI.getInstance().deleteElementFromPublishQueueTable(contentlet.getIdentifier(), contentlet.getLanguageId());
-                        } catch (DotPublisherException e) {
-                            Logger.error(getClass(), "Error deleting Contentlet from Publishing Queue with Identifier: " + contentlet.getIdentifier());
-                            Logger.debug(getClass(), "Error deleting Contentlet from Publishing Queue with Identifier: " + contentlet.getIdentifier(), e);
-                        }
-                    }
-                }
-            }
-
-            deletedIdentifiers.add(con.getIdentifier());
-            this.sendDeleteEvent(con);
-        }
-
-        return noErrors;
+        return this.permissionAPI.filterCollection(contentlets,
+                PermissionAPI.PERMISSION_PUBLISH, respectFrontendRoles, user);
     }
 
     private void sendDeleteEvent (final Contentlet contentlet) throws DotHibernateException {
@@ -2227,13 +2706,15 @@ public class ESContentletAPIImpl implements ContentletAPI {
         contentlets.add(contentlet);
         contentFactory.deleteVersion(contentlet);
 
-        ContentletVersionInfo cinfo=APILocator.getVersionableAPI().getContentletVersionInfo(
+        Optional<ContentletVersionInfo> cinfo=APILocator.getVersionableAPI().getContentletVersionInfo(
                 contentlet.getIdentifier(), contentlet.getLanguageId());
 
-        if(cinfo.getWorkingInode().equals(contentlet.getInode()) ||
-                (InodeUtils.isSet(cinfo.getLiveInode()) && cinfo.getLiveInode().equals(contentlet.getInode())))
+        if(cinfo.isPresent() && (cinfo.get().getWorkingInode().equals(contentlet.getInode()) ||
+                (InodeUtils.isSet(cinfo.get().getLiveInode())
+                        && cinfo.get().getLiveInode().equals(contentlet.getInode())))) {
             // we remove from index if it is the working or live version
             indexAPI.removeContentFromIndex(contentlet);
+        }
 
         CacheLocator.getIdentifierCache().removeFromCacheByVersionable(contentlet);
 
@@ -2242,116 +2723,255 @@ public class ESContentletAPIImpl implements ContentletAPI {
 
     @WrapInTransaction
     @Override
-    public void archive(final Contentlet contentlet, final User user, final boolean respectFrontendRoles) throws DotDataException,DotSecurityException, DotContentletStateException {
+    public void archive(final Contentlet contentlet, final User user, final boolean respectFrontendRoles)
+            throws DotDataException, DotSecurityException, DotContentletStateException {
+
         archive(contentlet, user, respectFrontendRoles, false);
     }
 
-    private void archive(final Contentlet contentlet, final User user, final boolean respectFrontendRoles, final boolean isDestroy) throws DotDataException,DotSecurityException, DotContentletStateException {
-        logContentletActivity(contentlet, "Archiving Content", user);
+    /**
+     * check if a workflow may be run instead of the archive api call itself.
+     * @param contentletIn
+     * @param user
+     * @param respectFrontendRoles
+     * @return Optional Contentlet, present is the workflow ran and returns the contentlet archived.
+     * @throws DotSecurityException
+     * @throws DotDataException
+     */
+    private Optional<Contentlet> checkAndRunArchiveAsWorkflow(final Contentlet contentletIn, final User user,
+                                                       final boolean respectFrontendRoles) throws DotSecurityException, DotDataException {
+
+        // if already on workflow or has an actionid skip this method.
+        if (this.isDisableWorkflow(contentletIn)
+                || this.isWorkflowInProgress(contentletIn)
+                || this.isInvalidContentTypeForWorkflow(contentletIn)
+                || UtilMethods.isSet(contentletIn.getActionId())) {
+
+            return Optional.empty();
+        }
+
+        final WorkflowAPI workflowAPI = APILocator.getWorkflowAPI();
+        final Optional<WorkflowAction> workflowActionOpt =
+                workflowAPI.findActionMappedBySystemActionContentlet
+                        (contentletIn, SystemAction.ARCHIVE, user);
+
+        if (workflowActionOpt.isPresent()) {
+
+            final String title    = contentletIn.getTitle();
+            final String actionId = workflowActionOpt.get().getId();
+
+            // if the default action is in the avalable actions for the content.
+            if (!isDefaultActionOnAvailableActions(contentletIn, user, workflowAPI, actionId)) {
+                return Optional.empty();
+            }
+
+            Logger.info(this, () -> "The contentlet: " + contentletIn.getIdentifier() + " hasn't action id set"
+                    + " using the default action: " + actionId);
+
+            // if the action has a save action, we skip the current checkin
+            if (workflowActionOpt.get().hasArchiveActionlet()) {
+
+                Logger.info(this, () -> "The action: " + actionId + " has an archive contentlet actionlet"
+                        + " so firing a workflow and skipping the current archive for the contentlet: " + contentletIn.getIdentifier());
+
+                return Optional.ofNullable(workflowAPI.fireContentWorkflow(contentletIn,
+                        new ContentletDependencies.Builder().workflowActionId(actionId)
+                                .modUser(user)
+                                .respectAnonymousPermissions(respectFrontendRoles)
+                                .build()
+                ));
+            }
+
+            Logger.info(this, () -> "The action: " + contentletIn.getIdentifier() + " hasn't a archive contentlet actionlet"
+                    + " so including just the action to the contentlet: " + title);
+
+            contentletIn.setActionId(actionId);
+        }
+
+        return Optional.empty();
+    }
+
+    private void archive(final Contentlet contentlet, final User user, final boolean respectFrontendRoles, final boolean isDestroy)
+            throws DotDataException,DotSecurityException, DotContentletStateException {
+
+        this.logContentletActivity(contentlet, "Archiving Content", user);
+
         try {
 
-            if(contentlet.getInode().equals("")) {
+            if(contentlet.getInode().equals(StringPool.BLANK)) {
+
                 throw new DotContentletStateException(CAN_T_CHANGE_STATE_OF_CHECKED_OUT_CONTENT);
             }
-            if(!permissionAPI.doesUserHavePermission(contentlet, PermissionAPI.PERMISSION_EDIT, user, respectFrontendRoles)){
-                throw new DotSecurityException("User: " + (user != null ? user.getUserId() : "Unknown") + " does not " +
-                        "have permission to edit the contentlet with Identifier [" + contentlet.getIdentifier() + "]");
-            }
-            final IndexPolicy  indexPolicy             = contentlet.getIndexPolicy();
-            final IndexPolicy  indexPolicyDependencies = contentlet.getIndexPolicyDependencies();
-            final Contentlet workingContentlet = findContentletByIdentifier(contentlet.getIdentifier(), false, contentlet.getLanguageId(), user, respectFrontendRoles);
-            Contentlet liveContentlet = null;
-            try{
-                liveContentlet = findContentletByIdentifier(contentlet.getIdentifier(), true, contentlet.getLanguageId(), user, respectFrontendRoles);
-            }catch (DotContentletStateException ce) {
-                Logger.debug(this,"No live contentlet found for identifier = " + contentlet.getIdentifier());
-            }
-            canLock(contentlet, user);
-            User modUser = null;
-            User systemUser = null;
-            try{
-                modUser = APILocator.getUserAPI().loadUserById(workingContentlet.getModUser(),APILocator.getUserAPI().getSystemUser(),false);
-                systemUser = APILocator.getUserAPI().getSystemUser();
-            }catch(Exception ex){
-                if(ex instanceof NoSuchUserException){
-                    modUser = APILocator.getUserAPI().getSystemUser();
+
+            final Optional<Contentlet> contentletOpt = this.checkAndRunArchiveAsWorkflow(contentlet, user, respectFrontendRoles);
+            if (contentletOpt.isPresent()) {
+
+                Logger.info(this, "A Workflow has been ran instead of archive the contentlet: " +
+                        contentlet.getIdentifier());
+                if (!contentlet.getInode().equals(contentletOpt.get().getInode())) {
+                    this.copyProperties(contentlet, contentletOpt.get().getMap());
                 }
+                return;
             }
 
-            if(modUser != null){
-                workingContentlet.setModUser(modUser.getUserId());
-            }
-
-            // If the user calling this method is System, no other condition is required.
-            // Note: no need to validate this on DELETE SITE/HOST.
-            if (contentlet.getMap().get(Contentlet.DONT_VALIDATE_ME) != null || canLock(contentlet, user)) {
-
-                if (liveContentlet != null && InodeUtils.isSet(liveContentlet.getInode())) {
-                    APILocator.getVersionableAPI().removeLive(liveContentlet);
-                    if (!isDestroy) {
-                        indexAPI.removeContentFromLiveIndex(liveContentlet);
-                    }
-                }
-
-                // sets deleted to true
-                APILocator.getVersionableAPI().setDeleted(workingContentlet, true);
-
-                // Updating lucene index
-                workingContentlet.setIndexPolicy(indexPolicy);
-                workingContentlet.setIndexPolicyDependencies(indexPolicyDependencies);
-                if (!isDestroy) {
-                    indexAPI.addContentToIndex(workingContentlet);
-                }
-
-                if(contentlet.getStructure().getStructureType()==Structure.STRUCTURE_TYPE_FILEASSET) {
-                    Identifier ident = APILocator.getIdentifierAPI().find(contentlet);
-                    CacheLocator.getCSSCache().remove(ident.getHostId(), ident.getPath(), true);
-                    CacheLocator.getCSSCache().remove(ident.getHostId(), ident.getPath(), false);
-                    //remove from navtoolcache
-                    IFileAsset fileAsset = APILocator.getFileAssetAPI().fromContentlet(contentlet);
-                    if(fileAsset.isShowOnMenu()){
-                        Folder folder = APILocator.getFolderAPI().findFolderByPath(ident.getParentPath(), ident.getHostId() , user, respectFrontendRoles);
-                        RefreshMenus.deleteMenu(folder);
-                        CacheLocator.getNavToolCache().removeNav(ident.getHostId(), folder.getInode());
-                    }
-                }
-                new ContentletLoader().invalidate(contentlet);
-
-                publishRelatedHtmlPages(contentlet);
-
-                if (contentlet.isHTMLPage()) {
-                    CacheLocator.getHTMLPageCache().remove(contentlet.getInode());
-                }
-
-                HibernateUtil.addCommitListener(() -> this.contentletSystemEventUtil.pushArchiveEvent(workingContentlet), 1000);
-                HibernateUtil.addCommitListener(() -> localSystemEventsAPI.notify(new ContentletArchiveEvent(contentlet, user, true)));
-            } else {
-                throw new DotContentletStateException("Contentlet with Identifier '" + contentlet.getIdentifier() +
-                        "' must be unlocked before being archived");
-            }
-
+            internalArchive(contentlet, user, respectFrontendRoles, isDestroy);
         } catch(DotDataException | DotStateException| DotSecurityException e) {
+
             final String errorMsg = "Error archiving content with Identifier [" + contentlet.getIdentifier() + "]: "
                     + e.getMessage();
             Logger.warn(this, errorMsg);
             logContentletActivity(contentlet, errorMsg, user);
             throw e;
         }
+
         logContentletActivity(contentlet, "Content Archived", user);
     }
 
+    private void internalArchive(final Contentlet contentlet, final User user, final boolean respectFrontendRoles,
+            final boolean isDestroy) throws DotDataException, DotSecurityException {
+
+        if(!permissionAPI.doesUserHavePermission(contentlet, PermissionAPI.PERMISSION_EDIT, user, respectFrontendRoles)) {
+
+            throw new DotSecurityException("User: " + (user != null ? user.getUserId() : "Unknown") + " does not " +
+                    "have permission to edit the contentlet with Identifier [" + contentlet.getIdentifier() + "]");
+        }
+
+        final IndexPolicy indexPolicy              = contentlet.getIndexPolicy();
+        final IndexPolicy  indexPolicyDependencies = contentlet.getIndexPolicyDependencies();
+        final Contentlet workingContentlet = findContentletByIdentifier(contentlet.getIdentifier(),
+                false, contentlet.getLanguageId(), user, respectFrontendRoles);
+
+        if(workingContentlet==null) {
+            return;
+        }
+
+        Contentlet liveContentlet = null;
+
+        try {
+
+            liveContentlet = findContentletByIdentifier(contentlet.getIdentifier(), true, contentlet.getLanguageId(), user, respectFrontendRoles);
+        } catch (DotContentletStateException ce) {
+
+            Logger.debug(this,"No live contentlet found for identifier = " + contentlet.getIdentifier());
+        }
+
+        this.canLock(contentlet, user);
+        final User modUser = getModUser(workingContentlet);
+
+        if(modUser != null) {
+
+            workingContentlet.setModUser(modUser.getUserId());
+        }
+
+        // If the user calling this method is System, no other condition is required.
+        // Note: no need to validate this on DELETE SITE/HOST.
+        if (contentlet.getMap().get(Contentlet.DONT_VALIDATE_ME) != null || this.canLock(contentlet, user)) {
+
+            this.internalArchive(contentlet, user, respectFrontendRoles, isDestroy, indexPolicy,
+                    indexPolicyDependencies, workingContentlet, liveContentlet);
+        } else {
+
+            throw new DotContentletStateException("Contentlet with Identifier '" + contentlet.getIdentifier() +
+                    "' must be unlocked before being archived");
+        }
+    } // internalArchive.
+
+    private void internalArchive(final Contentlet contentlet, final User user, final boolean respectFrontendRoles,
+            final boolean isDestroy, final IndexPolicy indexPolicy, final IndexPolicy indexPolicyDependencies,
+            final Contentlet workingContentlet, final Contentlet liveContentlet)
+            throws DotDataException, DotSecurityException {
+
+        if (liveContentlet != null && InodeUtils.isSet(liveContentlet.getInode())) {
+
+            APILocator.getVersionableAPI().removeLive(liveContentlet);
+
+            if (!isDestroy) {
+
+                this.indexAPI.removeContentFromLiveIndex(liveContentlet);
+            }
+        }
+
+        // sets deleted to true
+        APILocator.getVersionableAPI().setDeleted(workingContentlet, true);
+
+        // Updating lucene index
+        workingContentlet.setIndexPolicy(indexPolicy);
+        workingContentlet.setIndexPolicyDependencies(indexPolicyDependencies);
+        if (!isDestroy) {
+
+            this.indexAPI.addContentToIndex(workingContentlet);
+        }
+
+        this.archiveFileAsset(contentlet, user, respectFrontendRoles);
+
+        new ContentletLoader().invalidate(contentlet);
+        this.publishRelatedHtmlPages(contentlet);
+
+        if (contentlet.isHTMLPage()) {
+
+            CacheLocator.getHTMLPageCache().remove(contentlet.getInode());
+        }
+
+        HibernateUtil.addCommitListener(() -> this.contentletSystemEventUtil.pushArchiveEvent(workingContentlet), 1000);
+        HibernateUtil.addCommitListener(() -> localSystemEventsAPI.notify(new ContentletArchiveEvent(contentlet, user, true)));
+    } // internalArchive.
+
+    private void archiveFileAsset(final Contentlet contentlet, final User user, final boolean respectFrontendRoles)
+            throws DotDataException, DotSecurityException {
+
+        if(contentlet.getStructure().getStructureType() == Structure.STRUCTURE_TYPE_FILEASSET) {
+
+            final Identifier identifier = APILocator.getIdentifierAPI().find(contentlet);
+            CacheLocator.getCSSCache().remove(identifier.getHostId(), identifier.getPath(), true);
+            CacheLocator.getCSSCache().remove(identifier.getHostId(), identifier.getPath(), false);
+            //remove from navtoolcache
+            final IFileAsset fileAsset = APILocator.getFileAssetAPI().fromContentlet(contentlet);
+            if(fileAsset.isShowOnMenu()) {
+
+                final Folder folder = APILocator.getFolderAPI().findFolderByPath(identifier.getParentPath(),
+                        identifier.getHostId() , user, respectFrontendRoles);
+                RefreshMenus.deleteMenu(folder);
+                CacheLocator.getNavToolCache().removeNav(identifier.getHostId(), folder.getInode());
+            }
+        }
+    } // archiveFileAsset.
+
+    private User getModUser(final Contentlet workingContentlet) {
+
+        User modUser = null;
+
+        try {
+
+            modUser    = APILocator.getUserAPI().loadUserById(workingContentlet.getModUser(),
+                    APILocator.systemUser(),false);
+        } catch(Exception ex) {
+
+            if(ex instanceof NoSuchUserException) {
+
+                modUser =  APILocator.systemUser();
+            }
+        }
+        return modUser;
+    } // getModUser.
+
     // todo: everything should be in a transaction>????
     @Override
-    public void archive(List<Contentlet> contentlets, User user,boolean respectFrontendRoles) throws DotDataException,DotSecurityException {
+    public void archive(final List<Contentlet> contentlets, final User user, final boolean respectFrontendRoles) throws DotDataException, DotSecurityException {
+
         boolean stateError = false;
-        for (Contentlet contentlet : contentlets) {
-            try{
-                archive(contentlet, user, respectFrontendRoles);
+        for (final Contentlet contentlet : contentlets) {
+            try {
+
+                this.archive(contentlet, user, respectFrontendRoles);
             }catch (DotContentletStateException e) {
+
+                Logger.error(this, e.getMessage(), e);
                 stateError = true;
             }
         }
-        if(stateError){
+
+        if(stateError) {
+
             throw new DotContentletStateException("Unable to archive contentlets because one or more are locked");
         }
 
@@ -2359,41 +2979,33 @@ public class ESContentletAPIImpl implements ContentletAPI {
 
     @WrapInTransaction
     @Override
-    public void lock(Contentlet contentlet, User user,  boolean respectFrontendRoles) throws DotContentletStateException, DotDataException,DotSecurityException {
-        if(contentlet == null){
+    public void lock(final Contentlet contentlet, final User user,  boolean respectFrontendRoles) throws DotContentletStateException, DotDataException, DotSecurityException {
+
+        if(contentlet == null) {
+
             throw new DotContentletStateException("The contentlet cannot Be null");
         }
 
 
-        String contentPushPublishDate = contentlet.getStringProperty("wfPublishDate");
-        String contentPushPublishTime = contentlet.getStringProperty("wfPublishTime");
-        String contentPushExpireDate = contentlet.getStringProperty("wfExpireDate");
-        String contentPushExpireTime = contentlet.getStringProperty("wfExpireTime");
-
-        contentPushPublishDate = UtilMethods.isSet(contentPushPublishDate)?contentPushPublishDate:"N/D";
-        contentPushPublishTime = UtilMethods.isSet(contentPushPublishTime)?contentPushPublishTime:"N/D";
-        contentPushExpireDate = UtilMethods.isSet(contentPushExpireDate)?contentPushExpireDate:"N/D";
-        contentPushExpireTime = UtilMethods.isSet(contentPushExpireTime)?contentPushExpireTime:"N/D";
+        final String contentPushPublishDate = UtilMethods.get(contentlet.getStringProperty(Contentlet.WORKFLOW_PUBLISH_DATE), ND_SUPPLIER);
+        final String contentPushExpireDate  = UtilMethods.get(contentlet.getStringProperty(Contentlet.WORKFLOW_EXPIRE_DATE),  ND_SUPPLIER);
 
         ActivityLogger.logInfo(getClass(), "Locking Content", "StartDate: " +contentPushPublishDate+ "; "
                 + "EndDate: " +contentPushExpireDate + "; User:" + (user != null ? user.getUserId() : "Unknown")
                 + "; ContentIdentifier: " + (contentlet != null ? contentlet.getIdentifier() : "Unknown"), contentlet.getHost());
 
-
         try {
 
-            if(contentlet.getInode().equals(""))
+            if(StringPool.BLANK.equals(contentlet.getInode())) {
+
                 throw new DotContentletStateException(CAN_T_CHANGE_STATE_OF_CHECKED_OUT_CONTENT);
-            if(!permissionAPI.doesUserHavePermission(contentlet, PermissionAPI.PERMISSION_WRITE, user, respectFrontendRoles)){
-                throw new DotSecurityException("User cannot edit Contentlet");
             }
 
             canLock(contentlet, user);
 
             // persists the webasset
             APILocator.getVersionableAPI().setLocked(contentlet, true, user);
-            indexAPI.addContentToIndex(contentlet,false);
-
+            ThreadContextUtil.ifReindex(()-> indexAPI.addContentToIndex(contentlet, false));
         } catch(DotDataException | DotStateException| DotSecurityException e) {
             ActivityLogger.logInfo(getClass(), "Error Locking Content", "StartDate: " +contentPushPublishDate+ "; "
                     + "EndDate: " +contentPushExpireDate + "; User:" + (user != null ? user.getUserId() : "Unknown")
@@ -2418,7 +3030,7 @@ public class ESContentletAPIImpl implements ContentletAPI {
             reindexQueueAPI.addStructureReindexEntries(structure.getInode());
         } catch (DotDataException e) {
             Logger.error(this, e.getMessage(), e);
-            throw new DotReindexStateException("Unable to complete reindex",e);
+            throw new DotReindexStateException("Unable to complete reindex: " + e.getMessage(),e);
         }
     }
 
@@ -2435,11 +3047,23 @@ public class ESContentletAPIImpl implements ContentletAPI {
             //CacheLocator.getContentletCache().clearCache();
         } catch (DotDataException e) {
             Logger.error(this, e.getMessage(), e);
-            throw new DotReindexStateException("Unable to complete reindex",e);
+            throw new DotReindexStateException("Unable to complete reindex: " + e.getMessage(),e);
         }
 
     }
+    
+    @WrapInTransaction
+    @Override
+    public void refresh(ContentType type) throws DotReindexStateException {
+        try {
+            reindexQueueAPI.addStructureReindexEntries(type.id());
+            //CacheLocator.getContentletCache().clearCache();
+        } catch (DotDataException e) {
+            Logger.error(this, e.getMessage(), e);
+            throw new DotReindexStateException("Unable to complete reindex: " + e.getMessage(),e);
+        }
 
+    }
     /**
      *
      * @param contentlet
@@ -2488,7 +3112,7 @@ public class ESContentletAPIImpl implements ContentletAPI {
             reindexQueueAPI.refreshContentUnderHost(host);
         } catch (DotDataException e) {
             Logger.error(this, e.getMessage(), e);
-            throw new DotReindexStateException("Unable to complete reindex",e);
+            throw new DotReindexStateException("Unable to complete reindex: " + e.getMessage(),e);
         }
 
     }
@@ -2500,7 +3124,7 @@ public class ESContentletAPIImpl implements ContentletAPI {
             reindexQueueAPI.refreshContentUnderFolder(folder);
         } catch (DotDataException e) {
             Logger.error(this, e.getMessage(), e);
-            throw new DotReindexStateException("Unable to complete reindex",e);
+            throw new DotReindexStateException("Unable to complete reindex " + e.getMessage(),e);
         }
 
     }
@@ -2512,82 +3136,127 @@ public class ESContentletAPIImpl implements ContentletAPI {
             reindexQueueAPI.refreshContentUnderFolderPath(hostId, folderPath);
         } catch ( DotDataException e ) {
             Logger.error(this, e.getMessage(), e);
-            throw new DotReindexStateException("Unable to complete reindex", e);
+            throw new DotReindexStateException("Unable to complete reindex " + e.getMessage(),e);
         }
     }
 
     @WrapInTransaction
     @Override
-    public void unpublish(Contentlet contentlet, User user,boolean respectFrontendRoles) throws DotDataException,DotSecurityException, DotContentletStateException {
+    public void unpublish(final Contentlet contentlet, final User user, final boolean respectFrontendRoles) throws DotDataException,DotSecurityException, DotContentletStateException {
 
-        if(contentlet.getInode().equals("")) {
+        if(StringPool.BLANK.equals(contentlet.getInode())) {
+
             throw new DotContentletStateException(CAN_T_CHANGE_STATE_OF_CHECKED_OUT_CONTENT);
         }
 
-        if(!permissionAPI.doesUserHavePermission(contentlet, PermissionAPI.PERMISSION_PUBLISH, user, respectFrontendRoles)) {
+        if(!this.permissionAPI.doesUserHavePermission(contentlet, PermissionAPI.PERMISSION_PUBLISH, user, respectFrontendRoles)) {
+
             throw new DotSecurityException("User: " + (user != null ? user.getUserId() : "Unknown") + " cannot unpublish Contentlet");
         }
 
-        unpublish(contentlet, user, -1);
+        unpublish(contentlet, user, respectFrontendRoles, ThreadContextUtil.isReindex()?-1:0);
     }
 
+    /**
+     * check if a workflow may be run instead of the unpublish api call itself.
+     * @param contentletIn
+     * @param user
+     * @param respectFrontendRoles
+     * @return Optional contentlet, present if ran the workflow, returns the contentlet unpublish
+     * @throws DotSecurityException
+     * @throws DotDataException
+     */
+     private Optional<Contentlet> checkAndRunUnpublishAsWorkflow(final Contentlet contentletIn, final User user,
+                                                       final boolean respectFrontendRoles) throws DotSecurityException, DotDataException {
 
-    private void unpublish(final Contentlet contentlet, final User user, int reindex) throws DotDataException,DotSecurityException, DotContentletStateException {
+        // if already on workflow or has an actionid skip this method.
+        if (this.isDisableWorkflow(contentletIn)
+                || this.isWorkflowInProgress(contentletIn)
+                || this.isInvalidContentTypeForWorkflow(contentletIn)
+                || UtilMethods.isSet(contentletIn.getActionId())) {
+
+            return Optional.empty();
+        }
+
+        final WorkflowAPI workflowAPI = APILocator.getWorkflowAPI();
+        final Optional<WorkflowAction> workflowActionOpt =
+                workflowAPI.findActionMappedBySystemActionContentlet
+                        (contentletIn, SystemAction.UNPUBLISH, user);
+
+        if (workflowActionOpt.isPresent()) {
+
+            final String title    = contentletIn.getTitle();
+            final String actionId = workflowActionOpt.get().getId();
+
+            // if the default action is in the avalable actions for the content.
+            if (!isDefaultActionOnAvailableActions(contentletIn, user, workflowAPI, actionId)) {
+                return Optional.empty();
+            }
+
+            Logger.info(this, () -> "The contentlet: " + contentletIn.getIdentifier() + " hasn't action id set"
+                    + " using the default action: " + actionId);
+
+            // if the action has a save action, we skip the current checkin
+            if (workflowActionOpt.get().hasUnpublishActionlet()) {
+
+                Logger.info(this, () -> "The action: " + actionId + " has an unpublish contentlet actionlet"
+                        + " so firing a workflow and skipping the current publish for the contentlet: " + contentletIn.getIdentifier());
+
+                return Optional.ofNullable(workflowAPI.fireContentWorkflow(contentletIn,
+                        new ContentletDependencies.Builder().workflowActionId(actionId)
+                                .modUser(user)
+                                .respectAnonymousPermissions(respectFrontendRoles)
+                                .build()
+                ));
+            }
+
+            Logger.info(this, () -> "The action: " + contentletIn.getIdentifier() + " hasn't a unpublish contentlet actionlet"
+                    + " so including just the action to the contentlet: " + title);
+
+            contentletIn.setActionId(actionId);
+        }
+
+        return Optional.empty();
+    }
+
+    private void unpublish(final Contentlet contentlet, final User user, final boolean respectFrontendRoles, final int reindex) throws DotDataException,DotSecurityException, DotContentletStateException {
 
         if(contentlet == null || !UtilMethods.isSet(contentlet.getInode())) {
 
             throw new DotContentletStateException(CAN_T_CHANGE_STATE_OF_CHECKED_OUT_CONTENT);
         }
 
-        String contentPushPublishDate = contentlet.getStringProperty("wfPublishDate");
-        String contentPushPublishTime = contentlet.getStringProperty("wfPublishTime");
-        String contentPushExpireDate = contentlet.getStringProperty("wfExpireDate");
-        String contentPushExpireTime = contentlet.getStringProperty("wfExpireTime");
-
-        contentPushPublishDate = UtilMethods.isSet(contentPushPublishDate)?contentPushPublishDate:"N/D";
-        contentPushPublishTime = UtilMethods.isSet(contentPushPublishTime)?contentPushPublishTime:"N/D";
-        contentPushExpireDate = UtilMethods.isSet(contentPushExpireDate)?contentPushExpireDate:"N/D";
-        contentPushExpireTime = UtilMethods.isSet(contentPushExpireTime)?contentPushExpireTime:"N/D";
-
+        final String contentPushPublishDate = UtilMethods.get(contentlet.getStringProperty(Contentlet.WORKFLOW_PUBLISH_DATE), ND_SUPPLIER);
+        final String contentPushExpireDate  = UtilMethods.get(contentlet.getStringProperty(Contentlet.WORKFLOW_EXPIRE_DATE),  ND_SUPPLIER);
 
         ActivityLogger.logInfo(getClass(), "Unpublishing Content", "StartDate: " +contentPushPublishDate+ "; "
                 + "EndDate: " +contentPushExpireDate + "; User:" + (user != null ? user.getUserId() : "Unknown")
                 + "; ContentIdentifier: " + (contentlet != null ? contentlet.getIdentifier() : "Unknown"), contentlet.getHost());
 
         try {
-            canLock(contentlet, user);
 
-            APILocator.getVersionableAPI().removeLive(contentlet);
+            final Optional<Contentlet> contentletOpt = this.checkAndRunUnpublishAsWorkflow(contentlet, user, respectFrontendRoles);
+            if (contentletOpt.isPresent()) {
 
-            //"Disable" the tag created for this Persona key tag
-            if ( Structure.STRUCTURE_TYPE_PERSONA == contentlet.getStructure().getStructureType() ) {
-                //Mark the tag created based in the Persona tag key as a regular tag
-                APILocator.getPersonaAPI().enableDisablePersonaTag(contentlet, false);
+                Logger.info(this, "A Workflow has been ran instead of unpublish the contentlet: " +
+                        contentlet.getIdentifier());
+                if (!contentlet.getInode().equals(contentletOpt.get().getInode())) {
+                    this.copyProperties(contentlet, contentletOpt.get().getMap());
+                }
+                return;
             }
 
-            if (reindex == -1) {
-                indexAPI.addContentToIndex(contentlet);
-            }
-            indexAPI.removeContentFromLiveIndex(contentlet);
-
-            if(contentlet.getStructure().getStructureType()==Structure.STRUCTURE_TYPE_FILEASSET) {
-
-                cleanFileAssetCache(contentlet, user, false);
-            }
-
-            new ContentletLoader().invalidate(contentlet, PageMode.LIVE);
-            publishRelatedHtmlPages(contentlet);
+            this.internalUnpublish(contentlet, user, reindex);
 
             HibernateUtil.addCommitListener(() -> this.contentletSystemEventUtil.pushUnpublishEvent(contentlet), 1000);
-
             /*
             Triggers a local system event when this contentlet commit listener is executed,
             anyone who need it can subscribed to this commit listener event, on this case will be
             mostly use it in order to invalidate this contentlet cache.
              */
             triggerCommitListenerEvent(contentlet, user, false);
-
         } catch(DotDataException | DotStateException| DotSecurityException e) {
+
             ActivityLogger.logInfo(getClass(), "Error Unpublishing Content", "StartDate: " +contentPushPublishDate+ "; "
                     + "EndDate: " +contentPushExpireDate + "; User:" + (user != null ? user.getUserId() : "Unknown")
                     + "; ContentIdentifier: " + (contentlet != null ? contentlet.getIdentifier() : "Unknown"), contentlet.getHost());
@@ -2599,50 +3268,164 @@ public class ESContentletAPIImpl implements ContentletAPI {
                 + "; ContentIdentifier: " + (contentlet != null ? contentlet.getIdentifier() : "Unknown"), contentlet.getHost());
     }
 
+    private void internalUnpublish(final Contentlet contentlet, final User user, final int reindex)
+            throws DotDataException, DotSecurityException {
+
+        WorkflowProcessor workflow = null;
+        // to run a workflow we need an action id set, not be part of a workflow already and do not desired disable it
+        if(contentlet.getMap().get(Contentlet.DISABLE_WORKFLOW)==null &&
+                UtilMethods.isSet(contentlet.getActionId()) &&
+                (null == contentlet.getMap().get(Contentlet.WORKFLOW_IN_PROGRESS) ||
+                        Boolean.FALSE.equals(contentlet.getMap().get(Contentlet.WORKFLOW_IN_PROGRESS))
+                ))  {
+            workflow = APILocator.getWorkflowAPI().fireWorkflowPreCheckin(contentlet, user);
+        }
+
+        this.canLock(contentlet, user);
+
+        APILocator.getVersionableAPI().removeLive(contentlet);
+
+        //"Disable" the tag created for this Persona key tag
+        if ( Structure.STRUCTURE_TYPE_PERSONA == contentlet.getStructure().getStructureType() ) {
+            //Mark the tag created based in the Persona tag key as a regular tag
+            APILocator.getPersonaAPI().enableDisablePersonaTag(contentlet, false);
+        }
+
+        if(null != workflow) {
+
+            workflow.setContentlet(contentlet);
+            APILocator.getWorkflowAPI().fireWorkflowPostCheckin(workflow);
+        }
+
+        if (reindex == -1) {
+
+            this.indexAPI.addContentToIndex(contentlet);
+        }
+
+        this.indexAPI.removeContentFromLiveIndex(contentlet);
+
+        if(contentlet.getStructure().getStructureType() == Structure.STRUCTURE_TYPE_FILEASSET) {
+
+            this.cleanFileAssetCache(contentlet, user, false);
+        }
+
+        new ContentletLoader().invalidate(contentlet, PageMode.LIVE);
+        CacheLocator.getContentletCache().remove(contentlet.getInode());
+        if(contentlet.isVanityUrl()) {
+            APILocator.getVanityUrlAPI().invalidateVanityUrl(contentlet);
+        }
+        publishRelatedHtmlPages(contentlet);
+    }
+
     private void cleanFileAssetCache(final Contentlet contentlet, final User user,
                                      final boolean respectFrontEndPermissions) throws DotDataException, DotSecurityException {
 
-        final Identifier ident = APILocator.getIdentifierAPI().find(contentlet);
-        CacheLocator.getCSSCache().remove(ident.getHostId(), ident.getPath(), true);
+        final Identifier identifier = APILocator.getIdentifierAPI().find(contentlet);
+        CacheLocator.getCSSCache().remove(identifier.getHostId(), identifier.getPath(), true);
         //remove from navCache
         final IFileAsset fileAsset = APILocator.getFileAssetAPI().fromContentlet(contentlet);
         if (fileAsset.isShowOnMenu()) {
-            final Folder folder = APILocator.getFolderAPI().findFolderByPath(ident.getParentPath(), ident.getHostId(), user, respectFrontEndPermissions);
+            final Folder folder = APILocator.getFolderAPI().findFolderByPath(identifier.getParentPath(), identifier.getHostId(), user, respectFrontEndPermissions);
             RefreshMenus.deleteMenu(folder);
-            CacheLocator.getNavToolCache().removeNav(ident.getHostId(), folder.getInode());
+            CacheLocator.getNavToolCache().removeNav(identifier.getHostId(), folder.getInode());
         }
     }
 
     // todo:should be in a transaction?
     @Override
-    public void unpublish(List<Contentlet> contentlets, User user,boolean respectFrontendRoles) throws DotDataException,    DotSecurityException, DotContentletStateException {
+    public void unpublish(final List<Contentlet> contentlets, final User user, final boolean respectFrontendRoles)
+            throws DotDataException, DotSecurityException, DotContentletStateException {
+
         boolean stateError = false;
-        for (Contentlet contentlet : contentlets) {
-            try{
-                unpublish(contentlet, user, respectFrontendRoles);
-            }catch (DotContentletStateException e) {
+
+        for (final Contentlet contentlet : contentlets) {
+
+            try {
+
+                this.unpublish(contentlet, user, respectFrontendRoles);
+            } catch (DotContentletStateException e) {
+
+                Logger.error(this, e.getMessage(), e);
                 stateError = true;
             }
         }
+
         if(stateError){
+
+            Logger.error(this, "Unable to unpublish one or more contentlets because it is locked");
             throw new DotContentletStateException("Unable to unpublish one or more contentlets because it is locked");
         }
     }
 
+    /**
+     * check if a workflow may be run instead of the unarchive api call itself.
+     * @param contentletIn
+     * @param user
+     * @param respectFrontendRoles
+     * @return Optional Contentlet, if present means the workflow ran, returns the contentlet unarchived
+     * @throws DotSecurityException
+     * @throws DotDataException
+     */
+    private Optional<Contentlet> checkAndRunUnarchiveAsWorkflow(final Contentlet contentletIn, final User user,
+                                                       final boolean respectFrontendRoles) throws DotSecurityException, DotDataException {
+
+        // if already on workflow or has an actionid skip this method.
+        if (this.isDisableWorkflow(contentletIn)
+                || this.isWorkflowInProgress(contentletIn)
+                || this.isInvalidContentTypeForWorkflow(contentletIn)
+                || UtilMethods.isSet(contentletIn.getActionId())) {
+
+            return Optional.empty();
+        }
+
+        final WorkflowAPI workflowAPI = APILocator.getWorkflowAPI();
+        final Optional<WorkflowAction> workflowActionOpt =
+                workflowAPI.findActionMappedBySystemActionContentlet
+                        (contentletIn, SystemAction.UNARCHIVE, user);
+
+        if (workflowActionOpt.isPresent()) {
+
+            final String title    = contentletIn.getTitle();
+            final String actionId = workflowActionOpt.get().getId();
+
+            // if the default action is in the avalable actions for the content.
+            if (!isDefaultActionOnAvailableActions(contentletIn, user, workflowAPI, actionId)) {
+                return Optional.empty();
+            }
+
+            Logger.info(this, () -> "The contentlet: " + contentletIn.getIdentifier() + " hasn't action id set"
+                    + " using the default action: " + actionId);
+
+            // if the action has a save action, we skip the current checkin
+            if (workflowActionOpt.get().hasUnarchiveActionlet()) {
+
+                Logger.info(this, () -> "The action: " + actionId + " has an unarchive contentlet actionlet"
+                        + " so firing a workflow and skipping the current unarchive for the contentlet: " + contentletIn.getIdentifier());
+
+                return Optional.ofNullable(workflowAPI.fireContentWorkflow(contentletIn,
+                        new ContentletDependencies.Builder().workflowActionId(actionId)
+                                .modUser(user)
+                                .respectAnonymousPermissions(respectFrontendRoles)
+                                .build()
+                ));
+            }
+
+            Logger.info(this, () -> "The action: " + contentletIn.getIdentifier() + " hasn't a unarchive contentlet actionlet"
+                    + " so including just the action to the contentlet: " + title);
+
+            contentletIn.setActionId(actionId);
+        }
+
+        return Optional.empty();
+    }
+
     @WrapInTransaction
     @Override
-    public void unarchive(final Contentlet contentlet, final User user, final boolean respectFrontendRoles) throws DotDataException,DotSecurityException, DotContentletStateException {
+    public void unarchive(final Contentlet contentlet, final User user, final boolean respectFrontendRoles)
+            throws DotDataException,DotSecurityException, DotContentletStateException {
 
-        String contentPushPublishDate = contentlet.getStringProperty("wfPublishDate");
-        String contentPushPublishTime = contentlet.getStringProperty("wfPublishTime");
-        String contentPushExpireDate = contentlet.getStringProperty("wfExpireDate");
-        String contentPushExpireTime = contentlet.getStringProperty("wfExpireTime");
-
-        contentPushPublishDate = UtilMethods.isSet(contentPushPublishDate)?contentPushPublishDate:"N/D";
-        contentPushPublishTime = UtilMethods.isSet(contentPushPublishTime)?contentPushPublishTime:"N/D";
-        contentPushExpireDate = UtilMethods.isSet(contentPushExpireDate)?contentPushExpireDate:"N/D";
-        contentPushExpireTime = UtilMethods.isSet(contentPushExpireTime)?contentPushExpireTime:"N/D";
-
+        final String contentPushPublishDate = UtilMethods.get(contentlet.getStringProperty(Contentlet.WORKFLOW_PUBLISH_DATE), ND_SUPPLIER);
+        final String contentPushExpireDate  = UtilMethods.get(contentlet.getStringProperty(Contentlet.WORKFLOW_EXPIRE_DATE),  ND_SUPPLIER);
 
         ActivityLogger.logInfo(getClass(), "Unarchiving Content", "StartDate: " +contentPushPublishDate+ "; "
                 + "EndDate: " +contentPushExpireDate + "; User:" + (user != null ? user.getUserId() : "Unknown")
@@ -2650,37 +3433,30 @@ public class ESContentletAPIImpl implements ContentletAPI {
 
         try {
 
-            if(contentlet.getInode().equals(""))
+            if(StringPool.BLANK.equals(contentlet.getInode())) {
+
                 throw new DotContentletStateException(CAN_T_CHANGE_STATE_OF_CHECKED_OUT_CONTENT);
-            if(!permissionAPI.doesUserHavePermission(contentlet, PermissionAPI.PERMISSION_PUBLISH, user, respectFrontendRoles)){
+            }
+
+            if(!this.permissionAPI.doesUserHavePermission(contentlet, PermissionAPI.PERMISSION_PUBLISH, user, respectFrontendRoles)) {
+
                 throw new DotSecurityException("User: " + (user != null ? user.getUserId() : "Unknown") + " cannot unpublish Contentlet");
             }
-            Contentlet workingContentlet = findContentletByIdentifier(contentlet.getIdentifier(), false, contentlet.getLanguageId(), user, respectFrontendRoles);
-            Contentlet liveContentlet = null;
-            canLock(contentlet, user);
-            try{
-                liveContentlet = findContentletByIdentifier(contentlet.getIdentifier(), true, contentlet.getLanguageId(), user, respectFrontendRoles);
-            }catch (DotContentletStateException ce) {
-                Logger.debug(this,"No live contentlet found for identifier = " + contentlet.getIdentifier());
+
+            final Optional<Contentlet> contentletOpt = this.checkAndRunUnarchiveAsWorkflow(contentlet, user, respectFrontendRoles);
+            if (contentletOpt.isPresent()) {
+
+                Logger.info(this, "A Workflow has been ran instead of unarchive the contentlet: " +
+                        contentlet.getIdentifier());
+                if (!contentlet.getInode().equals(contentletOpt.get().getInode())) {
+                    this.copyProperties(contentlet, contentletOpt.get().getMap());
+                }
+                return;
             }
-            if(liveContentlet != null && liveContentlet.getInode().equalsIgnoreCase(workingContentlet.getInode()) && !workingContentlet.isArchived())
-                throw new DotContentletStateException("Contentlet is unarchivable");
 
-            APILocator.getVersionableAPI().setDeleted(workingContentlet, false);
-
-            indexAPI.addContentToIndex(workingContentlet);
-
-            // we don't want to reindex this twice when it is the same version
-            if(liveContentlet!=null && UtilMethods.isSet(liveContentlet.getInode())
-                    && !liveContentlet.getInode().equalsIgnoreCase(workingContentlet.getInode()))
-                indexAPI.addContentToIndex(liveContentlet);
-
-            new ContentletLoader().invalidate(contentlet);
-            publishRelatedHtmlPages(contentlet);
-
-            HibernateUtil.addCommitListener(() -> this.sendUnArchiveContentSystemEvent(contentlet), 1000);
-            HibernateUtil.addCommitListener(() -> localSystemEventsAPI.notify(new ContentletArchiveEvent(contentlet, user, false)));
+            this.internalUnarchive(contentlet, user, respectFrontendRoles);
         } catch(DotDataException | DotStateException| DotSecurityException e) {
+
             ActivityLogger.logInfo(getClass(), "Error Unarchiving Content", "StartDate: " +contentPushPublishDate+ "; "
                     + "EndDate: " +contentPushExpireDate + "; User:" + (user != null ? user.getUserId() : "Unknown")
                     + "; ContentIdentifier: " + (contentlet != null ? contentlet.getIdentifier() : "Unknown"), contentlet.getHost());
@@ -2692,6 +3468,48 @@ public class ESContentletAPIImpl implements ContentletAPI {
                 + "; ContentIdentifier: " + (contentlet != null ? contentlet.getIdentifier() : "Unknown"), contentlet.getHost());
     }
 
+    private void internalUnarchive(final Contentlet contentlet, final User user, final boolean respectFrontendRoles)
+            throws DotDataException, DotSecurityException {
+
+        final Contentlet workingContentlet = this.findContentletByIdentifier(contentlet.getIdentifier(),
+                false, contentlet.getLanguageId(), user, respectFrontendRoles);
+        Contentlet liveContentlet         = null;
+
+        this.canLock(contentlet, user);
+
+        try {
+
+            liveContentlet = this.findContentletByIdentifier(contentlet.getIdentifier(), true,
+                    contentlet.getLanguageId(), user, respectFrontendRoles);
+        } catch (DotContentletStateException ce) {
+
+            Logger.debug(this,()->"No live contentlet found for identifier = " + contentlet.getIdentifier());
+        }
+
+        if(liveContentlet != null && liveContentlet.getInode().equalsIgnoreCase(workingContentlet.getInode())
+                && !workingContentlet.isArchived()) {
+
+            throw new DotContentletStateException("Contentlet is unarchivable");
+        }
+
+        APILocator.getVersionableAPI().setDeleted(workingContentlet, false);
+
+        this.indexAPI.addContentToIndex(workingContentlet);
+
+        // we don't want to reindex this twice when it is the same version
+        if(liveContentlet!=null && UtilMethods.isSet(liveContentlet.getInode())
+                && !liveContentlet.getInode().equalsIgnoreCase(workingContentlet.getInode())) {
+
+            this.indexAPI.addContentToIndex(liveContentlet);
+        }
+
+        new ContentletLoader().invalidate(contentlet);
+        publishRelatedHtmlPages(contentlet);
+
+        HibernateUtil.addCommitListener(() -> this.sendUnArchiveContentSystemEvent(contentlet), 1000);
+        HibernateUtil.addCommitListener(() -> localSystemEventsAPI.notify(new ContentletArchiveEvent(contentlet, user, false)));
+    }
+
     private void sendUnArchiveContentSystemEvent (final Contentlet contentlet) {
 
             this.contentletSystemEventUtil.pushUnArchiveEvent(contentlet);
@@ -2699,25 +3517,35 @@ public class ESContentletAPIImpl implements ContentletAPI {
 
     // todo: should be in a transaction.
     @Override
-    public void unarchive(List<Contentlet> contentlets, User user,boolean respectFrontendRoles) throws DotDataException,DotSecurityException, DotContentletStateException {
+    public void unarchive(final List<Contentlet> contentlets, final User user,
+            final boolean respectFrontendRoles) throws DotDataException,DotSecurityException, DotContentletStateException {
+
         boolean stateError = false;
-        for (Contentlet contentlet : contentlets) {
-            try{
-                unarchive(contentlet, user, respectFrontendRoles);
-            }catch (DotContentletStateException e) {
+
+        for (final Contentlet contentlet : contentlets) {
+
+            try {
+
+                this.unarchive(contentlet, user, respectFrontendRoles);
+            } catch (DotContentletStateException e) {
+
+                Logger.error(this, e.getMessage(), e);
                 stateError = true;
             }
         }
-        if(stateError){
+
+        if(stateError) {
+
             throw new DotContentletStateException("Unable to unarchive one or more contentlets because it is locked");
         }
-    }
+    } // unarchive.
 
     @Override
     public void deleteRelatedContent(Contentlet contentlet, Relationship relationship, User user,
             boolean respectFrontendRoles)
             throws DotDataException, DotSecurityException, DotContentletStateException {
-        deleteRelatedContent(contentlet, relationship, FactoryLocator.getRelationshipFactory()
+
+        this.deleteRelatedContent(contentlet, relationship, FactoryLocator.getRelationshipFactory()
                 .isParent(relationship, contentlet.getStructure()), user, respectFrontendRoles);
     }
 
@@ -2732,11 +3560,13 @@ public class ESContentletAPIImpl implements ContentletAPI {
     public void deleteRelatedContent(final Contentlet contentlet, final Relationship relationship,
             final boolean hasParent, final User user, final boolean respectFrontendRoles, final List<Contentlet> contentletsToBeRelated)
             throws DotDataException, DotSecurityException, DotContentletStateException {
+
         if (!permissionAPI.doesUserHavePermission(contentlet, PermissionAPI.PERMISSION_EDIT, user,
                 respectFrontendRoles)) {
             throw new DotSecurityException("User: " + (user != null ? user.getUserId() : "Unknown")
                     + " cannot edit Contentlet with identifier " + contentlet.getIdentifier());
         }
+
         List<Relationship> rels = FactoryLocator.getRelationshipFactory()
                 .byContentType(contentlet.getContentType());
         if (!rels.contains(relationship)) {
@@ -2778,62 +3608,55 @@ public class ESContentletAPIImpl implements ContentletAPI {
         }
     }
 
-    private void invalidateRelatedContentCache(Contentlet contentlet, Relationship relationship,
+    @Override
+    public void invalidateRelatedContentCache(Contentlet contentlet, Relationship relationship,
             boolean hasParent) {
 
-        String fieldVariable = null;
-        try {
-            //If relationship field, related content cache must be invalidated
-            if (relationship.isRelationshipField()) {
+        //If relationship field, related content cache must be invalidated
+        if (relationship.isRelationshipField()) {
 
-                if (relationshipAPI.sameParentAndChild(relationship)) {
-                    if (relationship.getParentRelationName() != null) {
-                        fieldVariable = relationship.getParentRelationName();
-                        contentlet.setRelated(relationship.getParentRelationName(), null);
-                        CacheLocator.getRelationshipCache()
-                                .removeRelatedContentFromMap(contentlet.getIdentifier(),
-                                        relationship.getParentRelationName());
-                    }
+            if (relationshipAPI.sameParentAndChild(relationship)) {
+                if (relationship.getParentRelationName() != null) {
+                    contentlet.setRelated(relationship.getParentRelationName(), null);
+                    CacheLocator.getRelationshipCache()
+                            .removeRelatedContentMap(contentlet.getIdentifier());
+                }
 
-                    if (relationship.getChildRelationName() != null) {
-                        fieldVariable = relationship.getChildRelationName();
-                        contentlet.setRelated(relationship.getChildRelationName(), null);
-                        CacheLocator.getRelationshipCache()
-                                .removeRelatedContentFromMap(contentlet.getIdentifier(),
-                                        relationship.getChildRelationName());
-                    }
-                } else {
-                    if (!hasParent && relationship.getParentRelationName() != null) {
-                        fieldVariable = relationship.getParentRelationName();
-                        contentlet.setRelated(relationship.getParentRelationName(), null);
-                        CacheLocator.getRelationshipCache()
-                                .removeRelatedContentFromMap(contentlet.getIdentifier(),
-                                        relationship.getParentRelationName());
-                    } else if (hasParent && relationship.getChildRelationName() != null) {
-                        fieldVariable = relationship.getChildRelationName();
-                        contentlet.setRelated(relationship.getChildRelationName(), null);
-                        CacheLocator.getRelationshipCache()
-                                .removeRelatedContentFromMap(contentlet.getIdentifier(),
-                                        relationship.getChildRelationName());
-                    }
+                if (relationship.getChildRelationName() != null) {
+                    contentlet.setRelated(relationship.getChildRelationName(), null);
+                    CacheLocator.getRelationshipCache()
+                            .removeRelatedContentMap(contentlet.getIdentifier());
+                }
+            } else {
+                if (!hasParent && relationship.getParentRelationName() != null) {
+                    contentlet.setRelated(relationship.getParentRelationName(), null);
+                    CacheLocator.getRelationshipCache()
+                            .removeRelatedContentMap(contentlet.getIdentifier());
+                } else if (hasParent && relationship.getChildRelationName() != null) {
+                    contentlet.setRelated(relationship.getChildRelationName(), null);
+                    CacheLocator.getRelationshipCache()
+                            .removeRelatedContentMap(contentlet.getIdentifier());
                 }
             }
-
-        } catch (DotCacheException e) {
-            Logger.debug(this, String.format(
-                    "Cache entry with key %s was not found for contentlet with identifier %s.",
-                    fieldVariable, contentlet.getIdentifier()),
-                    e);
         }
     }
 
-    @CloseDBIfOpened
     @Override
     public List<Contentlet> getRelatedContent(final Contentlet contentlet, final String variableName,
             final User user,
             final boolean respectFrontendRoles, Boolean pullByParents, final int limit,
-            final int offset,
-            final String sortBy) {
+            final int offset, final String sortBy){
+        return getRelatedContent(contentlet, variableName, user, respectFrontendRoles,
+                pullByParents, limit, offset, sortBy, -1, null);
+    }
+
+    @CloseDBIfOpened
+    @Override
+    public List<Contentlet> getRelatedContent(final Contentlet contentlet,
+            final String variableName,
+            final User user,
+            final boolean respectFrontendRoles, Boolean pullByParents, final int limit,
+            final int offset, final String sortBy, final long language, final Boolean live) {
 
         if (variableName == null){
             return Collections.EMPTY_LIST;
@@ -2868,14 +3691,22 @@ public class ESContentletAPIImpl implements ContentletAPI {
                 currentUser = APILocator.getUserAPI().getAnonymousUser();
             }
 
-            final List<Contentlet> relatedContentlet;
+            List<Contentlet> relatedContentlet;
 
             if (relatedIds.containsKey(variableName)) {
-                relatedContentlet = getCachedRelatedContentlets(relatedIds, variableName);
+                relatedContentlet = getCachedRelatedContentlets(relatedIds, variableName, language,
+                        currentUser.equals(APILocator.getUserAPI().getAnonymousUser()) ? Boolean.TRUE
+                                : live);
             } else {
                 relatedContentlet = getNonCachedRelatedContentlets(contentlet, relatedIds,
                         variableName, pullByParents,
-                        limit, offset, sortBy);
+                        limit, offset, language,
+                        currentUser.equals(APILocator.getUserAPI().getAnonymousUser()) ? Boolean.TRUE
+                                : live);
+            }
+
+            if (sortBy != null){
+                Collections.sort(relatedContentlet, new ContentMapComparator(sortBy));
             }
 
             //Restricts contentlet according to user permissions
@@ -2890,57 +3721,62 @@ public class ESContentletAPIImpl implements ContentletAPI {
     }
 
     /**
+     * Retrieves the Contentlets that are associated to a specific piece of Content through a specific Relationship
+     * field. This method is executed for Relationships that are not currently cached by dotCMS, and must be looked up
+     * from scratch.
      *
-     * @param contentlet
-     * @param relatedIds
-     * @param variableName
+     * @param contentlet   The {@link Contentlet} object whose related Contentlets will be retrieved.
+     * @param relatedIds   The data structure that will store the related Contentlets.
+     * @param variableName The Velocity Variable name of the Relationship field for the Content Type that the {@code
+     *                     contentlet} object belongs to.
      * @param pullByParent
-     * @param limit
-     * @param offset
-     * @param sortBy
-     * @return
-     * @throws DotDataException
+     * @param limit        Pagination parameter for the total number of results to return.
+     * @param offset       Pagination parameter for the offset.
+     *
+     * @return The list of related {@link Contentlet} objects.
+     *
+     * @throws DotDataException     An error occurred when interacting with the data source.
      * @throws DotSecurityException
      */
     @Nullable
     private List<Contentlet> getNonCachedRelatedContentlets(final Contentlet contentlet,
             final Map<String, List<String>> relatedIds, final String variableName,
-            final Boolean pullByParent, final int limit, final int offset,
-            final String sortBy)
+            final Boolean pullByParent, final int limit, final int offset, final long language, final Boolean live)
             throws DotDataException, DotSecurityException {
 
         final User systemUser = APILocator.getUserAPI().getSystemUser();
         com.dotcms.contenttype.model.field.Field field = null;
-        final List<Contentlet> relatedList;
         Relationship relationship;
 
         try {
             field = APILocator
                     .getContentTypeFieldAPI()
                     .byContentTypeIdAndVar(contentlet.getContentTypeId(), variableName);
-
-            relationship = relationshipAPI.getRelationshipFromField(field, systemUser);
-
-
-        }catch(NotFoundInDbException e){
-            //Search for legacy relationships
-            relationship =  relationshipAPI.byTypeValue(variableName);
+            relationship = this.relationshipAPI.getRelationshipFromField(field, systemUser);
+        } catch (final NotFoundInDbException e) {
+            // Search for legacy relationships
+            relationship = this.relationshipAPI.byTypeValue(variableName);
         }
 
-        if (relationship == null){
-            throw new DotStateException("No relationship found");
+        if (null == relationship) {
+            throw new DotStateException(String.format("Relationship field '%s' in Content Type ID '%s' was not found." +
+                    " Make sure that the relationship table points to the correct field.", variableName, contentlet
+                    .getContentTypeId()));
         }
-        relatedList = filterRelatedContent(contentlet, relationship, systemUser, false,
-                pullByParent, limit, offset, sortBy);
+        final List<Contentlet> relatedList = filterRelatedContent(contentlet, relationship, systemUser, false,
+                pullByParent, limit, offset);
 
+        // Get unique identifiers to avoid duplicates (used to save on cache and filter the final list if needed
+        final List<String> uniqueIdentifiers = relatedList.stream().map(Contentlet::getIdentifier).distinct()
+                .collect(CollectionsUtils.toImmutableList());
 
-        //Cache related content only if it is a relationship field
-        if (field != null && limit == -1 && offset == 0 && sortBy == null) {
+        //Cache related content only if it is a relationship field and there is no filter
+        //In case of self-relationships, we shouldn't cache any value for a particular field when pullByParent==null
+        //because in this case all parents and children are returned
+        if (field != null && limit == -1 && offset <= 0 &&
+                !(this.relationshipAPI.sameParentAndChild(relationship) && pullByParent == null)) {
             if (UtilMethods.isSet(relatedList)) {
-                relatedIds.put(variableName,
-                        relatedList.stream().map(cont -> cont.getIdentifier())
-                                .collect(
-                                        CollectionsUtils.toImmutableList()));
+                relatedIds.put(variableName, uniqueIdentifiers);
             } else {
                 relatedIds.put(variableName, Collections.emptyList());
             }
@@ -2948,7 +3784,16 @@ public class ESContentletAPIImpl implements ContentletAPI {
             CacheLocator.getRelationshipCache().putRelatedContentMap(contentlet.getIdentifier(), relatedIds);
         }
 
-        return relatedList;
+        if (live == null && language == -1) {
+            return relatedList;
+        } else{
+            /*Filter by live and/or language if set
+              If live=true, for each content, it needs to return the live version.
+              Otherwise, it would return the working one*/
+            return uniqueIdentifiers.stream()
+                    .flatMap(identifier -> filterRelatedContentByLiveAndLanguage(language, live, identifier))
+                    .collect(Collectors.toList());
+        }
     }
 
     /**
@@ -2959,21 +3804,48 @@ public class ESContentletAPIImpl implements ContentletAPI {
      */
     @NotNull
     private List<Contentlet> getCachedRelatedContentlets(final Map<String, List<String>> relatedIds,
-            final String variableName) {
-        final List<Contentlet> relatedList = relatedIds
-                .get(variableName).stream()
-                .map(identifier -> {
-                    try {
-                        return APILocator.getContentletAPI()
-                                .findContentletByIdentifierAnyLanguage(identifier);
-                    } catch (DotDataException | DotSecurityException e) {
-                        Logger.warn(this, "No content found with id " + identifier,
-                                e);
-                        throw new DotStateException(e);
-                    }
-                }).collect(Collectors.toList());
+            final String variableName, final long language, final Boolean live) {
 
-        return relatedList;
+        return relatedIds
+                .get(variableName).stream()
+                .flatMap(identifier -> filterRelatedContentByLiveAndLanguage(language, live, identifier))
+                .collect(Collectors.toList());
+    }
+
+    /**
+     *
+     * @param language
+     * @param live
+     * @param identifier
+     * @return
+     */
+    private Stream<? extends Contentlet> filterRelatedContentByLiveAndLanguage(final long language, final Boolean live,
+            final String identifier) {
+
+        final List<Contentlet> relatedContentList = new ArrayList<>();
+        //If language is set, we must return the content version in that language.
+        //Otherwise, we need to return a version for each language if exists
+        List<Long> languages = language > 0 ? CollectionsUtils.list(language)
+                : languageAPI.getLanguages().stream().map(lang -> lang.getId()).collect(
+                        Collectors.toList());
+
+        for (Long currentLanguage : languages) {
+            try{
+                Contentlet currentContent = findContentletByIdentifier(
+                        identifier, live == null ? false : live,
+                        currentLanguage, APILocator.getUserAPI().getSystemUser(),
+                        false);
+                if (currentContent != null) {
+                    relatedContentList.add(currentContent);
+                }
+            } catch (DotDataException | DotSecurityException | DotContentletStateException e) {
+                Logger.warnEveryAndDebug(this.getClass(),
+                        "No live version for contentlet identifier "
+                                + identifier, e, 5000);
+            }
+        }
+
+        return relatedContentList.stream();
     }
 
     @WrapInTransaction
@@ -3171,6 +4043,9 @@ public class ESContentletAPIImpl implements ContentletAPI {
     @Override
     public Contentlet checkin(Contentlet contentlet, User user,boolean respectFrontendRoles)
             throws IllegalArgumentException,DotDataException, DotSecurityException {
+        
+        user = (user==null) ? APILocator.getUserAPI().getAnonymousUser() : user;
+        
         return checkin(contentlet, (ContentletRelationships) null, null, null, user,
             respectFrontendRoles, false);
     }
@@ -3235,6 +4110,16 @@ public class ESContentletAPIImpl implements ContentletAPI {
         return checkin(contentlet, relationshipsData, cats , user, respectFrontendRoles, false, false);
     }
 
+    @CloseDBIfOpened
+    @Override
+    public Contentlet checkinWithoutVersioning(final Contentlet contentlet,
+            final ContentletRelationships contentRelationships, final List<Category> cats,
+            final List<Permission> permissions, final User user, final boolean respectFrontendRoles)
+            throws DotContentletStateException, DotSecurityException, DotDataException {
+        return checkin(contentlet, contentRelationships, cats, user, respectFrontendRoles, false,
+                false);
+    }
+
     /**
      *
      * @param contentletIn
@@ -3250,19 +4135,20 @@ public class ESContentletAPIImpl implements ContentletAPI {
      * @throws DotContentletValidationException
      */
     @WrapInTransaction
-    private Contentlet checkin(final Contentlet contentletIn, ContentletRelationships contentRelationships,
-            final List<Category> categories,
-            final User user, boolean respectFrontendRoles, boolean createNewVersion,
-            boolean generateSystemEvent) throws DotDataException, DotSecurityException {
+    private Contentlet checkin(final Contentlet contentletIn, final ContentletRelationships contentRelationships,
+            final List<Category> categories, final User user, boolean respectFrontendRoles,
+            final boolean createNewVersion,  final boolean generateSystemEvent) throws DotDataException, DotSecurityException {
 
         Contentlet contentletOut = null;
+        Boolean autoAssign       = null;
+
         try {
 
-            String wfPublishDate = contentletIn.getStringProperty("wfPublishDate");
-            String wfExpireDate = contentletIn.getStringProperty("wfExpireDate");
-
+            String wfPublishDate = contentletIn.getStringProperty(Contentlet.WORKFLOW_PUBLISH_DATE);
+            String wfExpireDate  = contentletIn.getStringProperty(Contentlet.WORKFLOW_EXPIRE_DATE);
+            final boolean isWorkflowInProgress = contentletIn.isWorkflowInProgress();
             final String contentPushPublishDateBefore = UtilMethods.isSet(wfPublishDate) ? wfPublishDate : "N/D";
-            final String contentPushExpireDateBefore = UtilMethods.isSet(wfExpireDate) ? wfExpireDate : "N/D";
+            final String contentPushExpireDateBefore  = UtilMethods.isSet(wfExpireDate) ? wfExpireDate : "N/D";
 
             ActivityLogger.logInfo(getClass(), "Saving Content",
                     "StartDate: " + contentPushPublishDateBefore + "; "
@@ -3271,9 +4157,25 @@ public class ESContentletAPIImpl implements ContentletAPI {
                             + "; ContentIdentifier: " + (contentletIn != null ? contentletIn
                             .getIdentifier() : "Unknown"), contentletIn.getHost());
 
+            this.checkOrSetContentType(contentletIn, user);
+
             final String lockKey =
-                    "ContentletIdentifier:" + (UtilMethods.isSet(contentletIn.getIdentifier()) ? contentletIn.getIdentifier() : UUIDGenerator.generateUuid());
+                    "ContentletIdentifier:" + (UtilMethods.isSet(contentletIn.getIdentifier()) ?
+                            contentletIn.getIdentifier() : UUIDGenerator.generateUuid());
             try {
+
+                final Optional<Contentlet> workflowContentletOpt =
+                        this.validateWorkflowStateOrRunAsWorkflow(contentletIn, contentRelationships,
+                                categories, user, respectFrontendRoles, createNewVersion, generateSystemEvent);
+
+                if (workflowContentletOpt.isPresent()) {
+
+                    Logger.info(this, "A Workflow has been ran instead of checkin the contentlet: " +
+                            workflowContentletOpt.get().getIdentifier());
+                    return workflowContentletOpt.get();
+                }
+
+                autoAssign = (Boolean)contentletIn.getMap().get(Contentlet.AUTO_ASSIGN_WORKFLOW);
                 contentletOut = lockManager.tryLock(lockKey,
                                 () -> internalCheckin(
                                         contentletIn, contentRelationships, categories, user,
@@ -3281,11 +4183,12 @@ public class ESContentletAPIImpl implements ContentletAPI {
                                 )
                         ); // end synchronized block
             } catch (final Throwable t) {
+              Logger.warn(getClass(),t.getMessage(),t);
                  bubbleUpException(t);
             }
 
-            wfPublishDate = contentletOut.getStringProperty("wfPublishDate");
-            wfExpireDate = contentletOut.getStringProperty("wfExpireDate");
+            wfPublishDate = contentletOut.getStringProperty(Contentlet.WORKFLOW_PUBLISH_DATE);
+            wfExpireDate = contentletOut.getStringProperty(Contentlet.WORKFLOW_EXPIRE_DATE);
 
             final String contentPushPublishDateAfter = UtilMethods.isSet(wfPublishDate) ? wfPublishDate : "N/D";
             final String contentPushExpireDateAfter = UtilMethods.isSet(wfExpireDate) ? wfExpireDate : "N/D";
@@ -3297,7 +4200,15 @@ public class ESContentletAPIImpl implements ContentletAPI {
                             + "; ContentIdentifier: " + contentletOut.getIdentifier(),
                     contentletOut.getHost());
 
+            if(isWorkflowInProgress){
+                autoAssign = false;
+            }
+
             // Creates the Local System event
+            if ( null != autoAssign ) {
+                contentletOut.setBoolProperty(Contentlet.AUTO_ASSIGN_WORKFLOW, autoAssign);
+            }
+
             this.createLocalCheckinEvent (contentletOut, user, createNewVersion);
 
             //Create a System event for this contentlet
@@ -3311,16 +4222,212 @@ public class ESContentletAPIImpl implements ContentletAPI {
         }
     }
 
+    /*
+     * If the contentletIn is new, has not any content type assigned and has a base type set into the properties
+     * will try to figure out a match for the content type
+     */
+    private void checkOrSetContentType(final Contentlet contentletIn, final User user) {
+
+        final Optional<BaseContentType> baseTypeOpt = contentletIn.getBaseType();
+        if (contentletIn.isNew() && null == contentletIn.getContentType() &&
+                baseTypeOpt.isPresent()) {
+
+            final BaseContentType baseContentType = baseTypeOpt.get();
+            final Optional<BaseTypeToContentTypeStrategy>  typeStrategy =
+                    this.baseTypeToContentTypeStrategyResolver.get(baseContentType);
+
+            if (typeStrategy.isPresent()) {
+
+                final Host host = Try.of(()->APILocator.getHostAPI().find(
+                        contentletIn.getHost(), user, false)).getOrNull();
+                if (null != host) {
+
+                    final HttpServletRequest request = HttpServletRequestThreadLocal.INSTANCE.getRequest();
+                    final String sessionId = request!=null && request.getSession(false)!=null? request.getSession().getId() : null;
+                    final List<String> accessingList = null != request?
+                            Arrays.asList(user.getUserId(), APILocator.getTempFileAPI().getRequestFingerprint(request), sessionId):
+                            Arrays.asList(user.getUserId(), sessionId);
+
+
+                    final Optional<ContentType> contentTypeOpt = typeStrategy.get().apply(baseContentType,
+                            CollectionsUtils.map("user", user, "host", host,
+                                    "contentletMap", contentletIn.getMap(), "accessingList", accessingList));
+
+                    if (contentTypeOpt.isPresent()) {
+                        contentletIn.setContentType(contentTypeOpt.get());
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * check if a workflow may be run instead of the publish api call itself.
+     * @param contentletIn
+     * @param user
+     * @param respectFrontendRoles
+     * @return Optional Contentlet, present if workflow ran
+     * @throws DotSecurityException
+     * @throws DotDataException
+     */
+    private Optional<Contentlet> checkAndRunPublishAsWorkflow(final Contentlet contentletIn, final User user,
+                                                       final boolean respectFrontendRoles) throws DotSecurityException, DotDataException {
+
+        // if already on workflow or has an actionid skip this method.
+        if (this.isDisableWorkflow(contentletIn)
+                || this.isWorkflowInProgress(contentletIn)
+                || this.isInvalidContentTypeForWorkflow(contentletIn)
+                || UtilMethods.isSet(contentletIn.getActionId())) {
+
+            return Optional.empty();
+        }
+
+        final WorkflowAPI workflowAPI = APILocator.getWorkflowAPI();
+        final Optional<WorkflowAction> workflowActionOpt =
+                workflowAPI.findActionMappedBySystemActionContentlet
+                        (contentletIn, WorkflowAPI.SystemAction.PUBLISH, user);
+
+        if (workflowActionOpt.isPresent()) {
+
+            final String title    = contentletIn.getTitle();
+            final String actionId = workflowActionOpt.get().getId();
+
+            // if the default action is in the avalable actions for the content.
+            if (!isDefaultActionOnAvailableActions(contentletIn, user, workflowAPI, actionId)) {
+                return Optional.empty();
+            }
+
+            Logger.info(this, () -> "The contentlet: " + contentletIn.getIdentifier() + " hasn't action id set"
+                    + " using the default action: " + actionId);
+
+            // if the action has a save action, we skip the current checkin
+            if (workflowActionOpt.get().hasPublishActionlet()) {
+
+                Logger.info(this, () -> "The action: " + actionId + " has a publish contentlet actionlet"
+                        + " so firing a workflow and skipping the current publish for the contentlet: " + contentletIn.getIdentifier());
+
+                return Optional.ofNullable(workflowAPI.fireContentWorkflow(contentletIn,
+                        new ContentletDependencies.Builder().workflowActionId(actionId)
+                                .modUser(user)
+                                .respectAnonymousPermissions(respectFrontendRoles)
+                                .build()
+                ));
+            }
+
+            Logger.info(this, () -> "The action: " + contentletIn.getIdentifier() + " hasn't a publish contentlet actionlet"
+                    + " so including just the action to the contentlet: " + title);
+
+            contentletIn.setActionId(actionId);
+        }
+
+        return Optional.empty();
+    }
+
+    private boolean isDefaultActionOnAvailableActions(final Contentlet contentletIn,
+                                                      final User user,
+                                                      final WorkflowAPI workflowAPI,
+                                                      final String actionId) throws DotDataException, DotSecurityException {
+
+        if (workflowAPI.isActionAvailable(contentletIn, user, actionId)) {
+
+            return true;
+        }
+
+        Logger.info(this, () -> "The contentlet: " + contentletIn.getIdentifier()
+                + " has the action: " + actionId + " but the this is not an available action for it");
+        return false;
+    }
+
+    private Optional<Contentlet> validateWorkflowStateOrRunAsWorkflow(final Contentlet contentletIn, final ContentletRelationships contentRelationships,
+                                                                      final List<Category> categories, final User userIn,
+                                                                      final boolean respectFrontendRoles, final boolean createNewVersion,
+                                                                      boolean generateSystemEvent) throws DotSecurityException, DotDataException {
+
+        final User user = (userIn==null) ? APILocator.getUserAPI().getAnonymousUser() : userIn;
+        
+        
+        // if already on workflow or has an actionid skip this method.
+        if (this.isDisableWorkflow(contentletIn)
+                || this.isWorkflowInProgress(contentletIn)
+                || this.isInvalidContentTypeForWorkflow(contentletIn)
+                || UtilMethods.isSet(contentletIn.getActionId())) {
+
+            return Optional.empty();
+        }
+
+        final WorkflowAPI workflowAPI = APILocator.getWorkflowAPI();
+        // note: by now we are just using the new system action, even if the contentlet already exists.
+        // in the future if the contentlet exist, EDIT should be catch
+        final Optional<WorkflowAction> workflowActionOpt =
+                workflowAPI.findActionMappedBySystemActionContentlet
+                        (contentletIn, contentletIn.isNew()?WorkflowAPI.SystemAction.NEW:WorkflowAPI.SystemAction.EDIT, user);
+
+        if (workflowActionOpt.isPresent()) {
+
+            final String title = contentletIn.getTitle();
+            final String actionId = workflowActionOpt.get().getId();
+
+            // if the default action is in the avalable actions for the content.
+            if (!isDefaultActionOnAvailableActions(contentletIn, user, workflowAPI, actionId)) {
+                return Optional.empty();
+            }
+
+            Logger.info(this, () -> "The contentlet: " + title + " hasn't action id set"
+                    + " using the default action: " + actionId);
+
+            // if the action has a save action, we skip the current checkin
+            if (workflowActionOpt.get().hasSaveActionlet()) {
+
+                Logger.info(this, () -> "The action: " + actionId + " has a save contentlet actionlet"
+                        + " so firing a workflow and skipping the current checkin for the contentlet: " + title);
+
+                return Optional.ofNullable(workflowAPI.fireContentWorkflow(contentletIn,
+                        new ContentletDependencies.Builder().workflowActionId(actionId)
+                                .modUser(user).categories(categories).relationships(contentRelationships)
+                                .respectAnonymousPermissions(respectFrontendRoles)
+                                .generateSystemEvent(generateSystemEvent)
+                                .build()
+                ));
+            }
+
+            Logger.info(this, () -> "The action: " + actionId + " hasn't a save contentlet actionlet"
+                    + " so including just the action to the contentlet: " + title);
+
+            contentletIn.setActionId(actionId);
+        }
+
+        return Optional.empty();
+    }
+
+    private boolean isInvalidContentTypeForWorkflow(final Contentlet contentletIn) {
+
+        return Host.HOST_VELOCITY_VAR_NAME.equals(contentletIn.getContentType().variable());
+    }
+
+    private boolean isDisableWorkflow(final Contentlet contentlet) {
+        return contentlet.isDisableWorkflow();
+    }
+
+    private boolean isWorkflowInProgress (final Contentlet contentlet) {
+        return contentlet.isWorkflowInProgress();
+    }
 
     private Contentlet internalCheckin(Contentlet contentlet,
             ContentletRelationships contentRelationships, List<Category> cats,
-            final User user,
+            final User incomingUser,
             final boolean respectFrontendRoles,
             boolean createNewVersion
     ) throws DotDataException, DotSecurityException {
         
+        final User user = (incomingUser!=null) ? incomingUser : APILocator.getUserAPI().getAnonymousUser();
+        
+        if(user.isAnonymousUser() && AnonymousAccess.systemSetting() != AnonymousAccess.WRITE) {
+            throw new DotSecurityException("CONTENT_APIS_ALLOW_ANONYMOUS setting does not allow anonymous content WRITEs");
+        }
+        
         final boolean validateEmptyFile =
-                contentlet.getMap().get("_validateEmptyFile_") == null;
+                contentlet.getMap().containsKey(Contentlet.VALIDATE_EMPTY_FILE)?
+                        contentlet.getBoolProperty(Contentlet.VALIDATE_EMPTY_FILE):true;
 
         if(contentRelationships == null) {
 
@@ -3330,6 +4437,12 @@ public class ESContentletAPIImpl implements ContentletAPI {
             if (contentRelationships!=null) {
                 getAllRelationships(contentlet, contentRelationships);
             }
+        }
+
+        if (!isCheckInSafe(contentRelationships)){
+            this.esReadOnlyMonitor.start();
+            throw new DotContentletStateException(
+                    "Content cannot be saved at this moment. Reason: Elastic Search cluster is in read only mode.");
         }
 
         if(cats == null) {
@@ -3350,9 +4463,8 @@ public class ESContentletAPIImpl implements ContentletAPI {
             if(fileObject instanceof String && tempApi.isTempResource(contentlet.getStringProperty(field.variable()))) {
 
               final HttpServletRequest request = HttpServletRequestThreadLocal.INSTANCE.getRequest();
-              // we use the session 
-              final String sessionId = (request!=null && request.getSession(false)!=null) ? request.getSession().getId() : null;
-              final DotTempFile tempFile = tempApi.getTempFile(user, sessionId, contentlet.getStringProperty(field.variable())).get();
+
+              final DotTempFile tempFile = tempApi.getTempFile(request, contentlet.getStringProperty(field.variable())).get();
               contentlet.setBinary(field, tempFile.file);
             }
           }
@@ -3387,40 +4499,17 @@ public class ESContentletAPIImpl implements ContentletAPI {
                 throw new DotContentletStateException("Contentlet must exist already");
             if (contentlet != null && contentlet.isArchived() && contentlet.getMap().get(Contentlet.DONT_VALIDATE_ME) == null)
                 throw new DotContentletStateException("Unable to checkin an archived piece of content, please un-archive first");
-            if (!permissionAPI.doesUserHavePermission(InodeUtils.isSet(contentlet.getIdentifier()) ? contentlet : contentlet.getStructure(),
-                    PermissionAPI.PERMISSION_WRITE, user, respectFrontendRoles)) {
-                List<Role> rolesPublish = permissionAPI.getRoles(contentlet.getStructure().getPermissionId(), PermissionAPI.PERMISSION_PUBLISH, "CMS Owner", 0, -1);
-                List<Role> rolesWrite = permissionAPI.getRoles(contentlet.getStructure().getPermissionId(), PermissionAPI.PERMISSION_WRITE, "CMS Owner", 0, -1);
-                Role cmsOwner = APILocator.getRoleAPI().loadCMSOwnerRole();
-                boolean isCMSOwner = false;
-                if (rolesPublish.size() > 0 || rolesWrite.size() > 0) {
-                    for (Role role : rolesPublish) {
-                        if (role.getId().equals(cmsOwner.getId())) {
-                            isCMSOwner = true;
-                            break;
-                        }
-                    }
-                    if (!isCMSOwner) {
-                        for (Role role : rolesWrite) {
-                            if (role.getId().equals(cmsOwner.getId())) {
-                                isCMSOwner = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (!isCMSOwner) {
-                        this.throwSecurityException(contentlet, user);
-                    }
-                } else {
 
-                    this.throwSecurityException(contentlet, user);
-                }
-            }
-            if (createNewVersion && cats == null)
+            checkPermission(contentlet, respectFrontendRoles, user);
+
+            if (createNewVersion && cats == null) {
                 throw new IllegalArgumentException(
                         "The categories cannot be null when trying to checkin. The method was called improperly");
+            }
+
             try {
-                validateContentlet(contentlet, contentRelationships, cats);
+                // note: we do this in this way in order to invoke hooks if they are
+                APILocator.getContentletAPI().validateContentlet(contentlet, contentRelationships, cats);
 
             } catch (DotContentletValidationException ve) {
                 throw ve;
@@ -3435,6 +4524,7 @@ public class ESContentletAPIImpl implements ContentletAPI {
             WorkflowProcessor workflow=null;
 
             if(contentlet.getMap().get(Contentlet.DISABLE_WORKFLOW)==null &&
+                    UtilMethods.isSet(contentlet.getActionId()) &&
                     (null == contentlet.getMap().get(Contentlet.WORKFLOW_IN_PROGRESS) ||
                             Boolean.FALSE.equals(contentlet.getMap().get(Contentlet.WORKFLOW_IN_PROGRESS))
                     ))  {
@@ -3483,13 +4573,14 @@ public class ESContentletAPIImpl implements ContentletAPI {
             }
 
             // Keep the 5 properties BEFORE store the contentlet on DB.
-            final String contentPushPublishDate = contentlet.getStringProperty("wfPublishDate");
-            final String contentPushPublishTime = contentlet.getStringProperty("wfPublishTime");
-            final String contentPushExpireDate = contentlet.getStringProperty("wfExpireDate");
-            final String contentPushExpireTime = contentlet.getStringProperty("wfExpireTime");
-            final String contentPushNeverExpire = contentlet.getStringProperty("wfNeverExpire");
-            final String contentWhereToSend = contentlet.getStringProperty("whereToSend");
-            final String forcePush = contentlet.getStringProperty("forcePush");
+            final String contentPushPublishDate = contentlet.getStringProperty(Contentlet.WORKFLOW_PUBLISH_DATE);
+            final String contentPushPublishTime = contentlet.getStringProperty(Contentlet.WORKFLOW_PUBLISH_TIME);
+            final String contentPushExpireDate = contentlet.getStringProperty(Contentlet.WORKFLOW_EXPIRE_DATE);
+            final String contentPushExpireTime = contentlet.getStringProperty(Contentlet.WORKFLOW_EXPIRE_TIME);
+            final String contentPushNeverExpire = contentlet.getStringProperty(Contentlet.WORKFLOW_NEVER_EXPIRE);
+            final String contentWhereToSend = contentlet.getStringProperty(Contentlet.WHERE_TO_SEND);
+            final String filterKey = contentlet.getStringProperty(Contentlet.FILTER_KEY);
+            final String iWantTo = contentlet.getStringProperty(Contentlet.I_WANT_TO);
 
                 /*
                  For HTMLPages get the url of the page sent by the user, we use the Contentlet object to
@@ -3546,6 +4637,8 @@ public class ESContentletAPIImpl implements ContentletAPI {
 
                     //We should not store the tags inside the field, the relation must only exist on the tag_inode table
                     contentlet.setStringProperty(field.variable(), "");
+                } else if(value!=null && value.equals("")) { // empty string means wiping out the tags
+                    tagsValues.put(field.variable(), value);
                 }
             }
             
@@ -3567,6 +4660,13 @@ public class ESContentletAPIImpl implements ContentletAPI {
             for ( Entry<String, String> tagEntry : tagsValues.entrySet() ) {
                 //From the given CSV tags names list search for the tag objects and if does not exist create them
                 List<Tag> list = tagAPI.getTagsInText(tagEntry.getValue(), tagsHost);
+
+                // empty string for tag field value wipes out existing tags
+                if(UtilMethods.isSet(list) || tagEntry.getValue().equals("")) {
+                    tagAPI.deleteTagInodesByInodeAndFieldVarName(contentlet.getInode(),
+                            tagEntry.getKey());
+                }
+
                 for ( Tag tag : list ) {
                     //Relate the found/created tag with this contentlet
                     tagAPI.addContentletTagInode(tag, contentlet.getInode(), tagEntry.getKey());
@@ -3594,6 +4694,7 @@ public class ESContentletAPIImpl implements ContentletAPI {
                 removeURLFromContentlet( contentlet );
 
                 contentlet.setIdentifier(identifier.getId() );
+                contentlet = applyNullProperties(contentlet);
                 contentlet = contentFactory.save(contentlet);
                 contentlet.setIndexPolicy(indexPolicy);
                 contentlet.setIndexPolicyDependencies(indexPolicyDependencies);
@@ -3655,7 +4756,10 @@ public class ESContentletAPIImpl implements ContentletAPI {
                 workingContentlet = contentlet;
             }
 
-            if (createNewVersion || (!createNewVersion && (contentRelationships != null || cats != null))) {
+            final boolean movedContentDependencies = (createNewVersion || contentRelationships != null
+                    || cats != null);
+
+            if (movedContentDependencies) {
                 contentlet.setBoolProperty(CHECKIN_IN_PROGRESS, Boolean.TRUE);
                 moveContentDependencies(workingContentlet, contentlet, contentRelationships, cats, user, respectFrontendRoles);
             }
@@ -3774,12 +4878,10 @@ public class ESContentletAPIImpl implements ContentletAPI {
                             }
                             // We want to copy (not move) cause the same file could be in
                             // another field and we don't want to delete it in the first time.
-                            final boolean content_version_hard_link = Config
+                            final boolean contentVersionHardLink = Config
                                     .getBooleanProperty("CONTENT_VERSION_HARD_LINK", true);
-                            FileUtil.copyFile(incomingFile, newFile, content_version_hard_link, validateEmptyFile);
-                            // add the incomingFile to a list of files that will be deleted
-                            // after we iterate over all the fields.
-                            fileListToDelete.add(incomingFile);
+                            FileUtil.copyFile(incomingFile, newFile, contentVersionHardLink, validateEmptyFile);
+
 
                             // delete old content metadata if exists
                             if(metadata!=null && metadata.exists()){
@@ -3788,7 +4890,9 @@ public class ESContentletAPIImpl implements ContentletAPI {
 
                         } else if (oldFile.exists()) {
                             // otherwise, we copy the files as hardlinks
-                            FileUtil.copyFile(oldFile, newFile);
+                            final boolean contentVersionHardLink = Config
+                                    .getBooleanProperty("CONTENT_VERSION_HARD_LINK", true);
+                            FileUtil.copyFile(incomingFile, newFile, contentVersionHardLink, validateEmptyFile);
 
                             // try to get the content metadata from the old version
                             if (metadata != null) {
@@ -3859,10 +4963,9 @@ public class ESContentletAPIImpl implements ContentletAPI {
 
                         // we take all inodes associated with that identifier
                         // remove them from cache and then reindex them
-                        final HibernateUtil hu = new HibernateUtil(ContentletVersionInfo.class);
-                        hu.setQuery("from "+ContentletVersionInfo.class.getCanonicalName()+" where identifier=?");
-                        hu.setParam(ident.getId());
-                        final List<ContentletVersionInfo> list = hu.list();
+                        final List<ContentletVersionInfo> list = APILocator.getVersionableAPI()
+                                .findContentletVersionInfos(ident.getId());
+
                         final List<String> inodes = new ArrayList<>();
                         for(final ContentletVersionInfo cvi : list) {
                             inodes.add(cvi.getWorkingInode());
@@ -3978,12 +5081,19 @@ public class ESContentletAPIImpl implements ContentletAPI {
 
                 }
 
-                indexAPI.addContentToIndex(contentlet, false);
+                if (movedContentDependencies) {
+                    final Contentlet newContentlet = contentlet;
+                    ThreadContextUtil.ifReindex(
+                            () -> indexAPI.addContentToIndex(newContentlet, INCLUDE_DEPENDENCIES),
+                            INCLUDE_DEPENDENCIES);
+                } else if (ThreadContextUtil.isReindex()) {
+                    indexAPI.addContentToIndex(contentlet, false);
+                }
             }
 
             if(contentlet != null && contentlet.isVanityUrl()){
                 //remove from cache
-                VanityUrlServices.getInstance().invalidateVanityUrl(contentlet);
+               APILocator.getVanityUrlAPI().invalidateVanityUrl(contentlet);
             }
 
             if(contentlet != null && contentlet.isKeyValue()){
@@ -4016,13 +5126,14 @@ public class ESContentletAPIImpl implements ContentletAPI {
             }
 
             // Set the properties again after the store on DB and before the fire on an Actionlet.
-            contentlet.setStringProperty("wfPublishDate", contentPushPublishDate);
-            contentlet.setStringProperty("wfPublishTime", contentPushPublishTime);
-            contentlet.setStringProperty("wfExpireDate", contentPushExpireDate);
-            contentlet.setStringProperty("wfExpireTime", contentPushExpireTime);
-            contentlet.setStringProperty("wfNeverExpire", contentPushNeverExpire);
-            contentlet.setStringProperty("whereToSend", contentWhereToSend);
-            contentlet.setStringProperty("forcePush", forcePush);
+            contentlet.setStringProperty(Contentlet.WORKFLOW_PUBLISH_DATE, contentPushPublishDate);
+            contentlet.setStringProperty(Contentlet.WORKFLOW_PUBLISH_TIME, contentPushPublishTime);
+            contentlet.setStringProperty(Contentlet.WORKFLOW_EXPIRE_DATE, contentPushExpireDate);
+            contentlet.setStringProperty(Contentlet.WORKFLOW_EXPIRE_TIME, contentPushExpireTime);
+            contentlet.setStringProperty(Contentlet.WORKFLOW_NEVER_EXPIRE, contentPushNeverExpire);
+            contentlet.setStringProperty(Contentlet.WHERE_TO_SEND, contentWhereToSend);
+            contentlet.setStringProperty(Contentlet.FILTER_KEY, filterKey);
+            contentlet.setStringProperty(Contentlet.I_WANT_TO, iWantTo);
 
             //wapi.
             if(workflow!=null) {
@@ -4036,11 +5147,72 @@ public class ESContentletAPIImpl implements ContentletAPI {
             if(createNewVersion && workingContentlet!= null && UtilMethods.isSet(workingContentlet.getInode())){
                 APILocator.getVersionableAPI().setWorking(workingContentlet);
             }
-            Logger.error(this, e.getMessage(), e);
+
+            if (e instanceof DotContentletValidationException){
+                Logger.warnAndDebug(this.getClass(), e.getMessage(), e);
+            } else{
+                Logger.error(this, e.getMessage(), e);
+            }
 
             bubbleUpException(e);
         }
         return contentlet;
+    }
+
+    private void checkPermission(
+            final Contentlet contentlet,
+            final boolean respectFrontendRoles,
+            final User user) throws DotDataException, DotSecurityException {
+
+        DotPreconditions.checkNotNull(contentlet);
+
+        if (InodeUtils.isSet(contentlet.getIdentifier())){
+            if (!permissionAPI.doesUserHavePermission(contentlet, PermissionAPI.PERMISSION_WRITE, user, respectFrontendRoles)) {
+                this.throwSecurityException(contentlet, user);
+            }
+        } else if (!permissionAPI.doesUserHavePermission(contentlet.getContentType(),
+                PermissionAPI.PERMISSION_WRITE, user, respectFrontendRoles)) {
+            this.throwSecurityException(contentlet, user);
+        }
+    }
+
+    /**
+     * Method that verifies if a check in operation can be executed.
+     * It is safe to execute a checkin if write operations can be performed on the ES cluster.
+     * Otherwise, check in will be allowed only if the contentlet to be saved does not have legacy relationships
+     * @param relationships ContentletRelationships with the records to be saved
+     * @return
+     */
+    @VisibleForTesting
+    boolean isCheckInSafe(final ContentletRelationships relationships) {
+
+        if (relationships != null && relationships.getRelationshipsRecords().size() > 0) {
+            final boolean isClusterReadOnly = ElasticsearchUtil.isClusterInReadOnlyMode();
+            final boolean isEitherLiveOrWorkingIndicesReadOnly = ElasticsearchUtil.isEitherLiveOrWorkingIndicesReadOnly();
+
+            if (
+                    (isEitherLiveOrWorkingIndicesReadOnly || isClusterReadOnly)
+                            && hasLegacyRelationships(relationships)) {
+                return false;
+            }
+        }
+        return true;
+
+    }
+
+    /**
+     * Given a ContentletRelationships object, verifies if there is any legacy relationship on it
+     * @param relationships
+     * @return
+     */
+    private boolean hasLegacyRelationships(ContentletRelationships relationships) {
+        for (ContentletRelationshipRecords records : relationships
+                .getRelationshipsRecords()) {
+            if (!records.getRelationship().isRelationshipField()){
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -4069,14 +5241,7 @@ public class ESContentletAPIImpl implements ContentletAPI {
                 if (contentlet.getMap().containsKey(field.variable())) {
                     final Relationship relationship = relationshipAPI
                             .getRelationshipFromField(field, user);
-                    final boolean hasParent;
-                    if (relationshipAPI.sameParentAndChild(relationship)) {
-                        hasParent = relationship.getParentRelationName() == null || !relationship
-                                .getParentRelationName().equals(field.variable());
-                    } else {
-                        hasParent = relationshipAPI
-                                .isParent(relationship, contentlet.getContentType());
-                    }
+                    final boolean hasParent = relationshipAPI.isChildField(relationship, field);
 
                     if (contentRelationships == null){
                         contentRelationships = new ContentletRelationships(contentlet);
@@ -4122,15 +5287,27 @@ public class ESContentletAPIImpl implements ContentletAPI {
         }
     }
 
-    private void createLocalCheckinEvent(Contentlet contentlet, User user, boolean createNewVersion) throws DotHibernateException {
+    private void createLocalCheckinEvent(final Contentlet contentlet, final User user, final boolean createNewVersion) throws DotHibernateException {
 
-        HibernateUtil.addCommitListener
-                (()-> this.localSystemEventsAPI.notify(new ContentletCheckinEvent(contentlet, createNewVersion, user)));
+        HibernateUtil.addCommitListener(
+              ()-> this.localSystemEventsAPI.notify(new ContentletCheckinEvent<>(contentlet, createNewVersion, user))
+        );
     }
 
+    /**
+     * Updates the Template of the specified Contentlet - in case it's an HTML Page - in all of its existing language
+     * versions, only if its value is different from the current one. This update operation can be overridden by setting
+     * the configuration parameter {@code DO_NOT_UPDATE_TEMPLATES} as {@code true}.
+     *
+     * @param contentlet The {@link Contentlet} whose Template will be updated, if necessary
+     * @param user       The {@link User} performing this action.
+     *
+     * @throws DotDataException     An error occurred when interacting with the data source.
+     * @throws DotSecurityException The specified user does not have the required permissions to perform this action.
+     */
     private void updateTemplateInAllLanguageVersions(final Contentlet contentlet, final User user)
             throws DotDataException, DotSecurityException{
-        
+        final boolean DONT_RESPECT_FRONTEND_ROLES = Boolean.FALSE;
         final String DO_NOT_UPDATE_TEMPLATES= "DO_NOT_UPDATE_TEMPLATES";
         
         if(contentlet.getBoolProperty(DO_NOT_UPDATE_TEMPLATES)){
@@ -4141,28 +5318,36 @@ public class ESContentletAPIImpl implements ContentletAPI {
                     .getFieldVar(HTMLPageAssetAPI.TEMPLATE_FIELD);
             final String identifier = contentlet.getIdentifier();
             final String newTemplate = contentlet.get(HTMLPageAssetAPI.TEMPLATE_FIELD).toString();
-            final String existingTemplate = loadField(
-                    findContentletByIdentifierAnyLanguage(contentlet.getIdentifier())
-                            .getInode(), fieldVar).toString();
+            final Contentlet contentInAnyLang = findContentletByIdentifierAnyLanguage(contentlet.getIdentifier());
+            if (null == contentInAnyLang || !UtilMethods.isSet(contentInAnyLang.getIdentifier())) {
+                throw new DotDataException(String.format("Contentlet with ID '%s' has not been found, or is currently" +
+                        " marked as 'Archived'.", contentlet.getIdentifier()));
+            }
+            final String existingTemplate = loadField(contentInAnyLang.getInode(), fieldVar).toString();
             if (!existingTemplate.equals(newTemplate)){
-                List<ContentletVersionInfo> vers = APILocator.getVersionableAPI().findContentletVersionInfos(identifier);
+                final List<ContentletVersionInfo> contentletVersions = APILocator.getVersionableAPI().findContentletVersionInfos(identifier);
                 
-                for(ContentletVersionInfo ver : vers) {
-                    Contentlet c = find(ver.getWorkingInode(), user, false);
-                    if(contentlet.getInode().equals(c.getInode())) {
+                for (final ContentletVersionInfo version : contentletVersions) {
+                    final Contentlet contentVersion = find(version.getWorkingInode(), user, DONT_RESPECT_FRONTEND_ROLES);
+                    if (contentlet.getInode().equals(contentVersion.getInode())) {
                         continue;
                     }
 
                     //Create a new working version with the template when the page version is live and working
-                    Contentlet newPageVersion = checkout(c.getInode(), user, false);
+                    final Contentlet newPageVersion = checkout(contentVersion.getInode(), user, DONT_RESPECT_FRONTEND_ROLES);
                     newPageVersion.setBoolProperty(DO_NOT_UPDATE_TEMPLATES, true);
                     newPageVersion.setStringProperty(HTMLPageAssetAPI.TEMPLATE_FIELD, newTemplate);
                     newPageVersion.setBoolProperty(Contentlet.DONT_VALIDATE_ME, true);
-                    checkin(newPageVersion,  user, false);
+
+                    if (contentlet.getMap().containsKey(Contentlet.DISABLE_WORKFLOW)) {
+                        newPageVersion.getMap().put(Contentlet.DISABLE_WORKFLOW, contentlet.getMap().get(Contentlet.DISABLE_WORKFLOW));
+                    }
+                    if (contentlet.getMap().containsKey(Contentlet.WORKFLOW_IN_PROGRESS)) {
+                        newPageVersion.getMap().put(Contentlet.WORKFLOW_IN_PROGRESS, contentlet.getMap().get(Contentlet.WORKFLOW_IN_PROGRESS));
+                    }
+
+                    checkin(newPageVersion,  user, DONT_RESPECT_FRONTEND_ROLES);
                 }
-   
-
-
             }
         }
     }
@@ -4228,13 +5413,13 @@ public class ESContentletAPIImpl implements ContentletAPI {
 
     @WrapInTransaction
     @Override
-    public Contentlet checkout(String contentletInode, User user,boolean respectFrontendRoles) throws DotDataException,DotSecurityException, DotContentletStateException {
+    public Contentlet checkout(final String contentletInode, final User user, final boolean respectFrontendRoles) throws DotDataException,DotSecurityException, DotContentletStateException {
         //return new version
-        Contentlet contentlet = find(contentletInode, user, respectFrontendRoles);
+        final Contentlet contentlet = find(contentletInode, user, respectFrontendRoles);
 
         canLock(contentlet, user);
         lock(contentlet, user, respectFrontendRoles);
-        Contentlet workingContentlet = new Contentlet();
+        final Contentlet workingContentlet = new Contentlet();
         Map<String, Object> cmap = contentlet.getMap();
         workingContentlet.setStructureInode(contentlet.getStructureInode());
         workingContentlet.setInode(contentletInode);
@@ -4431,6 +5616,7 @@ public class ESContentletAPIImpl implements ContentletAPI {
         if(categories == null){
             categories = new ArrayList<>();
         }
+        
         //Find categories which the user can't use.  A user cannot remove a category they cannot use
         final List<Category> cats = categoryAPI.getParents(fromContentlet, APILocator.getUserAPI().getSystemUser(), true);
         for (final Category category : cats) {
@@ -4440,14 +5626,15 @@ public class ESContentletAPIImpl implements ContentletAPI {
                 }
             }
         }
-
+        
         categories = permissionAPI.filterCollection(categories, PermissionAPI.PERMISSION_USE, respect, user);
         categories.addAll(categoriesUserCannotRemove);
 
-        categoryAPI.setParents(toContentlet, categories, user, respect);
+        // we have already validated permissions on the content object, no need to do it again
+        categoryAPI.setParents(toContentlet, categories, APILocator.systemUser(), respect);
     }
 
-    @CloseDBIfOpened
+    @WrapInTransaction
     @Override
     public void restoreVersion(Contentlet contentlet, User user,boolean respectFrontendRoles) throws DotSecurityException, DotContentletStateException, DotDataException {
         if(contentlet.getInode().equals(""))
@@ -4504,7 +5691,7 @@ public class ESContentletAPIImpl implements ContentletAPI {
 
     @CloseDBIfOpened
     @Override
-    public String getName(Contentlet contentlet, User user, boolean respectFrontendRoles) throws DotSecurityException,DotContentletStateException, DotDataException {
+    public String getName(final Contentlet contentlet, final User user, final boolean respectFrontendRoles) throws DotSecurityException,DotContentletStateException, DotDataException {
 
         Preconditions.checkNotNull(contentlet, "The contentlet is null");
 
@@ -4515,42 +5702,7 @@ public class ESContentletAPIImpl implements ContentletAPI {
                     + " cannot read Contentlet: " + contentlet.getIdentifier());
         }
 
-        if (UtilMethods.isSet(contentlet.getIdentifier()) && contentlet.isFileAsset()) {
-           try {
-               final String assetName = APILocator.getIdentifierAPI().find(contentlet.getIdentifier()).getAssetName();
-               contentlet.setStringProperty(Contentlet.DOT_NAME_KEY, assetName);
-           }catch (Exception e){
-               Logger.warn(this.getClass(), "Unable to get assetName for contentlet with identifier: " + contentlet.getIdentifier(), e);
-           }
-        }
-
-        String returnValue = (String) contentlet.getMap().get(Contentlet.DOT_NAME_KEY);
-        if(UtilMethods.isSet(returnValue)){
-            return returnValue;
-        }
-
-
-        List<Field> fields = FieldsCache.getFieldsByStructureInode(contentlet.getStructureInode());
-
-        for (Field fld : fields) {
-
-            try{
-
-                if(fld.isListed() && contentlet.getMap().get(fld.getVelocityVarName())!=null){
-                    returnValue = contentlet.getMap().get(fld.getVelocityVarName()).toString();
-                    returnValue = returnValue.length() > 250 ? returnValue.substring(0,250) : returnValue;
-                    if(UtilMethods.isSet(returnValue)){
-                        contentlet.setStringProperty(Contentlet.DOT_NAME_KEY, returnValue);
-                        return returnValue;
-                    }
-                }
-            }
-            catch(Exception e){
-                Logger.warn(this.getClass(), "unable to get field value " + fld.getVelocityVarName() + " " + e, e);
-            }
-        }
-        contentlet.setStringProperty("__NAME__", contentlet.getIdentifier());
-        return contentlet.getIdentifier();
+        return contentlet.getTitle();
     }
 
     /**
@@ -4657,7 +5809,12 @@ public class ESContentletAPIImpl implements ContentletAPI {
                                 new StringBuilder(" (COPY_")
                                         .append(System.currentTimeMillis()).append(')').toString();
                         }
-                        contentlet.setStringProperty(conVariable, value != null ? (String)value : null);
+
+                        if (value instanceof CharSequence) {
+                            contentlet.setStringProperty(conVariable, value != null ? value.toString() : null);
+                        } else {
+                            contentlet.setProperty(conVariable, value);
+                        }
                     }else if(isFieldTypeBoolean(field)){
                         contentlet.setBoolProperty(conVariable, value != null ? (Boolean)value : null);
                     }else if(isFieldTypeFloat(field)){
@@ -4667,7 +5824,8 @@ public class ESContentletAPIImpl implements ContentletAPI {
                     }else if(isFieldTypeLong(field)){
                         contentlet.setLongProperty(conVariable,value != null ? ((Number)value).longValue(): null);
                     }else if(isFieldTypeBinary(field)){
-                        contentlet.setBinary(conVariable,(java.io.File)value);
+                        final File myFile = (value instanceof String) ? new File(String.valueOf(value)) : (File) value; 
+                        contentlet.setBinary(conVariable,myFile);
                     } else {
                         contentlet.setProperty(conVariable, value);
                     }
@@ -4722,6 +5880,12 @@ public class ESContentletAPIImpl implements ContentletAPI {
                 (String) properties.get(Contentlet.WORKFLOW_EXPIRE_TIME));
         contentlet.setStringProperty(Contentlet.WORKFLOW_NEVER_EXPIRE,
                 (String) properties.get(Contentlet.WORKFLOW_NEVER_EXPIRE));
+        contentlet.setStringProperty(Contentlet.FILTER_KEY,
+                (String) properties.get(Contentlet.FILTER_KEY));
+        contentlet.setStringProperty(Contentlet.WHERE_TO_SEND,
+                (String) properties.get(Contentlet.WHERE_TO_SEND));
+        contentlet.setStringProperty(Contentlet.I_WANT_TO,
+                (String) properties.get(Contentlet.I_WANT_TO));
     }
 
     @Override
@@ -4749,7 +5913,7 @@ public class ESContentletAPIImpl implements ContentletAPI {
             return search(buffy.toString(), 0, -1, orderBy, user, respectFrontendRoles);
         } catch (Exception pe) {
             Logger.error(this,"Unable to search for contentlets" ,pe);
-            throw new DotContentletStateException("Unable to search for contentlets", pe);
+            throw new DotContentletStateException("Unable to search for contentlets: " + pe.getMessage(), pe);
         }
     }
 
@@ -4857,14 +6021,18 @@ public class ESContentletAPIImpl implements ContentletAPI {
                 else if(value instanceof String && tempApi.isTempResource((String) value)) {
                   final HttpServletRequest request = HttpServletRequestThreadLocal.INSTANCE.getRequest();
                   // we use the session to verify access to the temp resource
-                  final String sessionId = (request!=null && request.getSession(false)!=null) ? request.getSession().getId() : null;
-                  final User user = Try.of(()->PortalUtil.getUser(request)).getOrNull();
-                  final DotTempFile tempFile = tempApi.getTempFile(user, sessionId, (String) value).get();
-                  contentlet.setBinary(field.getVelocityVarName(), tempFile.file);
+                  final Optional<DotTempFile> tempFileOptional =  tempApi
+                          .getTempFile(request, (String) value);
+
+                  if(tempFileOptional.isPresent()) {
+                        contentlet.setBinary(field.getVelocityVarName(), tempFileOptional.get().file);
+                  } else {
+                      throw new DotStateException("Invalid Temp File provided");
+                  }
 
                 }
-            }catch (Exception e) {
-                throw new DotContentletStateException("Unable to set binary file Object",e);
+            }catch (IOException e) {
+                throw new DotContentletStateException("Unable to set binary file Object: " + e.getMessage(),e);
             }
         }else if(field.getFieldContentlet().startsWith("system_field")){
             if(value.getClass()==java.lang.String.class){
@@ -4879,21 +6047,6 @@ public class ESContentletAPIImpl implements ContentletAPI {
         }
     }
 
-    private static final String[] SPECIAL_CHARS = new String[] { "+", "-", "&&", "||", "!", "(", ")", "{", "}", "[",
-            "]", "^", "\"", "?", ":", "\\" };
-
-    /**
-     *
-     * @param text
-     * @return
-     */
-    private static String escape(String text) {
-        for (int i = SPECIAL_CHARS.length - 1; i >= 0; i--) {
-            text = StringUtils.replace(text, SPECIAL_CHARS[i], "\\" + SPECIAL_CHARS[i]);
-        }
-
-        return text;
-    }
 
     /**
      * This method takes the incoming contentlet and determines if the new fileName we're receiving
@@ -4924,7 +6077,7 @@ public class ESContentletAPIImpl implements ContentletAPI {
             }
             return !incomingFileName.equals(identifier.getAssetName());
         } catch (Exception e) {
-            throw new DotContentletStateException("Exception trying to determine if there's a new incoming file.",e);
+            throw new DotContentletStateException("Exception trying to determine if there's a new incoming file:" + e.getMessage(),e);
         }
     }
 
@@ -4944,158 +6097,52 @@ public class ESContentletAPIImpl implements ContentletAPI {
         final ContentType contentType = Sneaky.sneak(() -> APILocator.getContentTypeAPI(APILocator.systemUser()).find
                 (contentTypeId));
         if (BaseContentType.FILEASSET.getType() == contentType.baseType().getType()) {
-            if(contentlet.getHost()!=null && contentlet.getHost().equals(Host.SYSTEM_HOST) && (!UtilMethods.isSet(contentlet.getFolder()) || contentlet.getFolder().equals(FolderAPI.SYSTEM_FOLDER))){
-                final DotContentletValidationException cve = new FileAssetValidationException("message.contentlet.fileasset.invalid.hostfolder");
-                Logger.warn(this, "File Asset [" + contentIdentifier + "] cannot be created directly under System " +
-                        "Host");
-                cve.addBadTypeField(new LegacyFieldTransformer(contentType.fieldMap().get(FileAssetAPI
-                        .HOST_FOLDER_FIELD)).asOldField());
-                throw cve;
-            }
-
-            //Enforce validation only if the file name isn't the same we've already got
-            if(hasNewIncomingFile(contentlet)){
-                boolean fileNameExists = false;
-                try {
-                    final Host site = APILocator.getHostAPI ().find(contentlet.getHost(), APILocator.getUserAPI().getSystemUser(), false);
-                    final Folder folder = UtilMethods.isSet(contentlet.getFolder())?
-                            APILocator.getFolderAPI().find(contentlet.getFolder(), APILocator.getUserAPI().getSystemUser(), false):
-                            APILocator.getFolderAPI().findSystemFolder();
-
-                    String fileName = contentlet.getBinary(FileAssetAPI.BINARY_FIELD) != null ? contentlet.getBinary(FileAssetAPI.BINARY_FIELD).getName() : StringPool.BLANK;
-                    if(UtilMethods.isSet(contentlet.getStringProperty("fileName"))){
-                        fileName = contentlet.getStringProperty("fileName");
-                    }
-                    if(UtilMethods.isSet(fileName)){
-                        fileNameExists = APILocator.getFileAssetAPI().fileNameExists(site, folder, fileName, contentlet.getIdentifier());
-                        if(!APILocator.getFolderAPI().matchFilter(folder, fileName)) {
-                            final DotContentletValidationException cve = new FileAssetValidationException("message.file_asset.error.filename.filters");
-                            Logger.warn(this, "File Asset [" + contentIdentifier + "] does not match specified folder" +
-                                    " file filters");
-                            cve.addBadTypeField(new LegacyFieldTransformer(contentType.fieldMap().get(FileAssetAPI
-                                    .HOST_FOLDER_FIELD)).asOldField());
-                            throw cve;
-                        }
-                    }
-
-                } catch (final Exception e) {
-                    if(e instanceof FileAssetValidationException) {
-                        throw (FileAssetValidationException) e;
-                    }
-                    final String errorMsg = "Unable to validate field: " + FileAssetAPI.BINARY_FIELD + " in " +
-                            "contentlet [" + contentIdentifier + "]";
-                    Logger.warn(this, errorMsg);
-                    throw new FileAssetValidationException(errorMsg, e);
-                }
-                if(fileNameExists){
-                    final DotContentletValidationException cve = new FileAssetValidationException("message.contentlet.fileasset.filename.already.exists");
-                    Logger.warn(this, "Name of File Asset [" + contentIdentifier + "] already exists");
-                    cve.addBadTypeField(new LegacyFieldTransformer(contentType.fieldMap().get(FileAssetAPI
-                            .HOST_FOLDER_FIELD)).asOldField());
-                    throw cve;
-                }
-            }
+            this.validateFileAsset(contentlet, contentIdentifier, contentType);
         }
 
         if (BaseContentType.HTMLPAGE.getType() == contentType.baseType().getType()) {
-            if(contentlet.getHost()!=null && contentlet.getHost().equals(Host.SYSTEM_HOST) && (!UtilMethods.isSet(contentlet.getFolder()) || contentlet.getFolder().equals(FolderAPI.SYSTEM_FOLDER))){
-                final DotContentletValidationException cve = new FileAssetValidationException("message.contentlet.fileasset.invalid.hostfolder");
-                Logger.warn(this, "HTML Page [" + contentIdentifier + "] cannot be created directly under System " +
-                        "Host");
-                cve.addBadTypeField(new LegacyFieldTransformer(contentType.fieldMap().get(FileAssetAPI
-                        .HOST_FOLDER_FIELD)).asOldField());
-                throw cve;
-            }
-            try{
-                final Host site = APILocator.getHostAPI().find(contentlet.getHost(), APILocator.getUserAPI().getSystemUser(), false);
-                Folder folder = null;
-                if(UtilMethods.isSet(contentlet.getFolder())){
-                    folder=APILocator.getFolderAPI().find(contentlet.getFolder(), APILocator.getUserAPI().getSystemUser(), false);
-                }
-                else{
-                    folder=APILocator.getFolderAPI().findSystemFolder();
-                }
-
-                //Get the URL from Identifier if it is not in Contentlet
-                String url = contentlet.getStringProperty(HTMLPageAssetAPI.URL_FIELD);
-
-                if(!UtilMethods.isSet(url)){
-
-                    if (InodeUtils.isSet(contentlet.getVersionId()) || InodeUtils.isSet(contentlet.getInode())) {
-                        Identifier identifier = APILocator.getIdentifierAPI().find(contentlet);
-                        if (UtilMethods.isSet(identifier) && UtilMethods.isSet(identifier.getAssetName())) {
-
-                            url = identifier.getAssetName();
-                        }
-                    }
-                }
-
-                if(UtilMethods.isSet(url)){
-                    contentlet.setProperty(HTMLPageAssetAPI.URL_FIELD, url);
-                    Identifier folderId = APILocator.getIdentifierAPI().find(folder);
-                    String path = folder.getInode().equals(FolderAPI.SYSTEM_FOLDER)?"/"+url:folderId.getPath()+url;
-                    Identifier htmlpage = APILocator.getIdentifierAPI().find(site, path);
-                    if(htmlpage!=null && InodeUtils.isSet(htmlpage.getId()) && !htmlpage.getId().equals(contentlet.getIdentifier()) ){
-                        final String errorMsg = "Page URL [" + path + "] already exists with content ID [" + htmlpage
-                                .getId() + "]";
-                        final DotContentletValidationException cve = new FileAssetValidationException(errorMsg);
-                        Logger.warn(this, errorMsg);
-                        cve.addBadTypeField(new LegacyFieldTransformer(contentType.fieldMap().get(HTMLPageAssetAPI
-                                .URL_FIELD)).asOldField());
-                        throw cve;
-                    }
-                    UtilMethods.validateFileName(url);
-                }
-
-            } catch (final DotDataException | DotSecurityException | IllegalArgumentException e) {
-                final String errorMsg = "Contentlet [" + contentIdentifier + "] has an invalid URL: " + contentlet
-                        .getStringProperty(HTMLPageAssetAPI.URL_FIELD);
-                final DotContentletValidationException cve = new FileAssetValidationException(errorMsg);
-                Logger.warn(this, errorMsg);
-                cve.addBadTypeField(new LegacyFieldTransformer(contentType.fieldMap().get(HTMLPageAssetAPI
-                        .URL_FIELD)).asOldField());
-                throw cve;
-            }
+            this.validateHtmlPage(contentlet, contentIdentifier, contentType);
         }
         boolean hasError = false;
         final DotContentletValidationException cve = new DotContentletValidationException("Contentlet [" +
                 contentIdentifier + "] has invalid / missing field(s).");
         final List<Field> fields = FieldsCache.getFieldsByStructureInode(contentTypeId);
-        final Map<String, Object> conMap = contentlet.getMap();
+        final Map<String, Object> contentletMap = contentlet.getMap();
         final Set<String> nullValueProperties = contentlet.getNullProperties();
         for (final Field field : fields) {
-            final Object o = (nullValueProperties.contains(field.getVelocityVarName()) ? null : conMap.get(field.getVelocityVarName()));
-            if(o != null){
+            final Object fieldValue = (nullValueProperties.contains(field.getVelocityVarName()) ? null : contentletMap.get(field.getVelocityVarName()));
+            // Validate Field Type
+            if(fieldValue != null){
                 if(isFieldTypeString(field)){
-                    if(!(o instanceof String)){
+                    if(!(fieldValue instanceof String)){
                         cve.addBadTypeField(field);
                         Logger.warn(this, "Value of field [" + field.getVelocityVarName() + "] must be of type String");
                         hasError = true;
                         continue;
                     }
                 }else if(isFieldTypeDate(field)){
-                    if(!(o instanceof Date)){
+                    if(!(fieldValue instanceof Date)){
                         cve.addBadTypeField(field);
                         Logger.warn(this, "Value of field [" + field.getVelocityVarName() + "] must be of type Date");
                         hasError = true;
                         continue;
                     }
                 }else if(isFieldTypeBoolean(field)){
-                    if(!(o instanceof Boolean)){
+                    if(!(fieldValue instanceof Boolean)){
                         cve.addBadTypeField(field);
                         Logger.warn(this, "Value of field [" + field.getVelocityVarName() + "] must be of type Boolean");
                         hasError = true;
                         continue;
                     }
                 }else if(isFieldTypeFloat(field)){
-                    if(!(o instanceof Float)){
+                    if(!(fieldValue instanceof Float)){
                         cve.addBadTypeField(field);
                         Logger.warn(this, "Value of field [" + field.getVelocityVarName() + "] must be of type Float");
                         hasError = true;
                         continue;
                     }
                 }else if(isFieldTypeLong(field)){
-                    if(!(o instanceof Long || o instanceof Integer)){
+                    if(!(fieldValue instanceof Long || fieldValue instanceof Integer)){
                         cve.addBadTypeField(field);
                         Logger.warn(this, "Value of field [" + field.getVelocityVarName() + "] must be of type Long or Integer");
                         hasError = true;
@@ -5103,7 +6150,7 @@ public class ESContentletAPIImpl implements ContentletAPI {
                     }
                     //  binary field validation
                 }else if(isFieldTypeBinary(field)){
-                    if(!(o instanceof java.io.File)){
+                    if(!(fieldValue instanceof java.io.File)){
                         cve.addBadTypeField(field);
                         Logger.warn(this, "Value of field [" + field.getVelocityVarName() + "] must be of type File");
                         hasError = true;
@@ -5116,9 +6163,10 @@ public class ESContentletAPIImpl implements ContentletAPI {
                     throw new DotContentletStateException("Field [" + field.getVelocityVarName() + "] has an unknown type");
                 }
             }
+            // validate required
             if (field.isRequired()) {
-                if(o instanceof String){
-                    String s1 = (String)o;
+                if(fieldValue instanceof String){
+                    String s1 = (String)fieldValue;
                     if(!UtilMethods.isSet(s1.trim()) || (field.getFieldType().equals(Field.FieldType.KEY_VALUE.toString())) && s1.equals("{}")) {
                         cve.addRequiredField(field);
                         hasError = true;
@@ -5126,8 +6174,8 @@ public class ESContentletAPIImpl implements ContentletAPI {
                         continue;
                     }
                 }
-                else if(o instanceof java.io.File){
-                    String s1 = ((java.io.File) o).getPath();
+                else if(fieldValue instanceof java.io.File){
+                    String s1 = ((java.io.File) fieldValue).getPath();
                     if(!UtilMethods.isSet(s1.trim())||s1.trim().contains("-removed-")) {
                         cve.addRequiredField(field);
                         hasError = true;
@@ -5136,10 +6184,10 @@ public class ESContentletAPIImpl implements ContentletAPI {
                     }
                 }
                 else if(field.getFieldType().equals(Field.FieldType.DATE_TIME.toString())){
-                    if(!UtilMethods.isSet(o)){
+                    if(!UtilMethods.isSet(fieldValue)){
                         if (null != contentType.expireDateVar()) {
                             if(field.getVelocityVarName().equals(contentType.expireDateVar())){
-                                if(NEVER_EXPIRE.equals(conMap.get(NEVER_EXPIRE))){
+                                if(NEVER_EXPIRE.equals(contentletMap.get(NEVER_EXPIRE))){
                                     continue;
                                 }else{
                                     cve.addRequiredField(field);
@@ -5206,23 +6254,23 @@ public class ESContentletAPIImpl implements ContentletAPI {
                         Logger.warn(this, "Site or Folder Field [" + field.getVelocityVarName() + "] is required");
                         continue;
                     }
-                } else if(!UtilMethods.isSet(o)) {
+                } else if(!UtilMethods.isSet(fieldValue)) {
                     cve.addRequiredField(field);
                     hasError = true;
                     Logger.warn(this, "Field [" + field.getVelocityVarName() + "] is required");
                     continue;
                 }
                 if(field.getFieldType().equals(Field.FieldType.IMAGE.toString()) || field.getFieldType().equals(Field.FieldType.FILE.toString())){
-                    if(o instanceof Number){
-                        Number n = (Number)o;
+                    if(fieldValue instanceof Number){
+                        Number n = (Number)fieldValue;
                         if(n.longValue() == 0){
                             cve.addRequiredField(field);
                             hasError = true;
                             Logger.warn(this, "Image Field (as number) [" + field.getVelocityVarName() + "] is required");
                             continue;
                         }
-                    }else if(o instanceof String){
-                        String s = (String)o;
+                    }else if(fieldValue instanceof String){
+                        String s = (String)fieldValue;
                         if(s.trim().equals("0")){
                             cve.addRequiredField(field);
                             hasError = true;
@@ -5232,8 +6280,8 @@ public class ESContentletAPIImpl implements ContentletAPI {
                     }
                     //WYSIWYG patch for blank content
                 }else if(field.getFieldType().equals(Field.FieldType.WYSIWYG.toString())){
-                    if(o instanceof String){
-                        String s = (String)o;
+                    if(fieldValue instanceof String){
+                        String s = (String)fieldValue;
                         if (s.trim().toLowerCase().equals("<br>")){
                             cve.addRequiredField(field);
                             hasError = true;
@@ -5243,28 +6291,31 @@ public class ESContentletAPIImpl implements ContentletAPI {
                     }
                 }
             }
-            if(field.isUnique()){
-                try{
-                    StringBuilder buffy = new StringBuilder();
 
-                    buffy.append(" +(live:true working:true)");
+            // validate unique
+            if(field.isUnique()){
+                final boolean isDataTypeNumber = field.getDataType().contains(DataTypes.INTEGER.toString())
+                        || field.getDataType().contains(DataTypes.FLOAT.toString());
+                try{
+                    StringBuilder buffy = new StringBuilder(UUIDGenerator.generateUuid());
                     buffy.append(" +structureInode:" + contentlet.getStructureInode());
-                    buffy.append(" +(working:true live:true)");
                     if(UtilMethods.isSet(contentlet.getIdentifier())){
                         buffy.append(" -(identifier:" + contentlet.getIdentifier() + ")");
                     }
 
                     buffy.append(" +languageId:" + contentlet.getLanguageId());
 
-                    buffy.append(" +" + contentlet.getContentType().variable() + "." + field
-                            .getVelocityVarName() + ESUtils.SHA_256 + ":");
-                    buffy.append(ESUtils.sha256(contentlet.getContentType().variable()
-                                    + "." + field.getVelocityVarName(),
-                            getFieldValue(contentlet, new LegacyFieldTransformer(field).from()),
+                    buffy.append(" +").append(contentlet.getContentType().variable()).append(StringPool.PERIOD)
+                            .append(field.getVelocityVarName()).append(ESUtils.SHA_256)
+                            .append(StringPool.COLON)
+                            .append(ESUtils.sha256(contentlet.getContentType().variable()
+                                    + StringPool.PERIOD + field.getVelocityVarName(), fieldValue,
                             contentlet.getLanguageId()));
-                    List<ContentletSearch> contentlets = new ArrayList<ContentletSearch>();
+
+                    List<ContentletSearch> contentlets = new ArrayList<>();
                     try {
-                        contentlets = searchIndex(buffy.toString(), -1, 0, "inode", APILocator.getUserAPI().getSystemUser(), false);
+                        contentlets.addAll(searchIndex(buffy.toString() + " +working:true", -1, 0, "inode", APILocator.getUserAPI().getSystemUser(), false));
+                        contentlets.addAll(searchIndex(buffy.toString() + " +live:true", -1, 0, "inode", APILocator.getUserAPI().getSystemUser(), false));
                     } catch (Exception e) {
                     	final String errorMsg = "Unique field [" + field.getVelocityVarName() + "] could not be validated: " + e.getMessage();
                         Logger.warn(this, errorMsg, e);
@@ -5279,11 +6330,8 @@ public class ESContentletAPIImpl implements ContentletAPI {
                             Map<String, Object> cMap = c.getMap();
                             Object obj = cMap.get(field.getVelocityVarName());
 
-                            boolean isDataTypeNumber = field.getDataType().contains(DataTypes.INTEGER.toString())
-                                    || field.getDataType().contains(DataTypes.FLOAT.toString());
-
-                            if ( ( isDataTypeNumber && o.equals(obj) ) ||
-                                    ( !isDataTypeNumber && ((String) obj).equalsIgnoreCase(((String) o)) ) )  {
+                            if ( ( isDataTypeNumber && fieldValue.equals(obj) ) ||
+                                    ( !isDataTypeNumber && ((String) obj).equalsIgnoreCase(((String) fieldValue)) ) )  {
                                 unique = false;
                                 break;
                             }
@@ -5316,11 +6364,13 @@ public class ESContentletAPIImpl implements ContentletAPI {
                     Logger.warn(this,"Unable to get contentlets for Content Type: " + contentlet.getStructure().getName(), e);
                 }
             }
+
+            // validate text
             String dataType = (field.getFieldContentlet() != null) ? field.getFieldContentlet().replaceAll("[0-9]*", "") : "";
-            if (UtilMethods.isSet(o) && dataType.equals("text")) {
+            if (UtilMethods.isSet(fieldValue) && dataType.equals("text")) {
                 String s = "";
                 try{
-                    s = (String)o;
+                    s = (String)fieldValue;
                 }catch (Exception e) {
                     Logger.warn(this, "Unable to get string value from text field [" + field.getVelocityVarName() +
                             "] in contentlet", e);
@@ -5334,11 +6384,13 @@ public class ESContentletAPIImpl implements ContentletAPI {
                     continue;
                 }
             }
+
+            // validate regex
             String regext = field.getRegexCheck();
             if (UtilMethods.isSet(regext)) {
-                if (UtilMethods.isSet(o)) {
-                    if(o instanceof Number){
-                        Number n = (Number)o;
+                if (UtilMethods.isSet(fieldValue)) {
+                    if(fieldValue instanceof Number){
+                        Number n = (Number)fieldValue;
                         String s = n.toString();
                         boolean match = Pattern.matches(regext, s);
                         if (!match) {
@@ -5348,8 +6400,8 @@ public class ESContentletAPIImpl implements ContentletAPI {
                                     "match");
                             continue;
                         }
-                    }else if(o instanceof String && UtilMethods.isSet(((String)o).trim())){
-                        String s = ((String)o).trim();
+                    }else if(fieldValue instanceof String && UtilMethods.isSet(((String)fieldValue).trim())){
+                        String s = ((String)fieldValue).trim();
                         boolean match = Pattern.matches(regext, s);
                         if (!match) {
                             hasError = true;
@@ -5361,9 +6413,195 @@ public class ESContentletAPIImpl implements ContentletAPI {
                     }
                 }
             }
+
+            // validate binary
+            if(isFieldTypeBinary(field)) {
+                this.validateBinary (File.class.cast(fieldValue), field.getVelocityVarName(), field, contentType);
+            }
+
         }
         if(hasError){
             throw cve;
+        }
+    }
+
+    private void validateBinary(final File binary, final String fieldName, final Field legacyField, final ContentType contentType) {
+
+        final Map<String, com.dotcms.contenttype.model.field.Field> fieldMap = contentType.fieldMap();
+
+        if (fieldMap.containsKey(fieldName) && null != binary) {
+
+            final List<FieldVariable> fieldVariables = fieldMap.get(fieldName).fieldVariables();
+
+            if (UtilMethods.isSet(fieldVariables)) {
+
+                for (final FieldVariable fieldVariable : fieldVariables) {
+
+                    final String keyField = fieldVariable.key();
+
+                    if (BinaryField.ALLOWED_FILE_TYPES.equalsIgnoreCase(keyField)) {
+
+                        final String binaryMimeType   = APILocator.getFileAssetAPI().getMimeType(binary);
+                        final String allowedFileTypes = fieldVariable.value();
+                        if (UtilMethods.isSet(allowedFileTypes) && UtilMethods.isSet(binaryMimeType) &&
+                                !FileAsset.UNKNOWN_MIME_TYPE.equals(binaryMimeType)) {
+
+                            boolean allowed = false;
+                            final MimeType fileMimeType = Sneaky.sneak(() -> new MimeType(binaryMimeType));
+                            final String[] allowedFileTypeArray = StringUtil.split(allowedFileTypes);
+                            for (final String allowFileType : allowedFileTypeArray) {
+
+                                final MimeType mimeType = Sneaky.sneak(() -> new MimeType(allowFileType));
+                                allowed |= mimeType.match(fileMimeType);
+                            }
+
+                            // if the extension of the file is not supported
+                            if (!allowed) {
+
+                                final DotContentletValidationException cve = new DotContentletValidationException(Sneaky.sneak(()->LanguageUtil.get("message.contentlet.binary.type.notallowed")));
+                                Logger.warn(this, "Name of Binary field [" + fieldName + "] has an not allowed type: " + binaryMimeType);
+                                cve.addBadTypeField(legacyField);
+                                throw cve;
+                            }
+                        }
+                    }
+
+                    if (BinaryField.MAX_FILE_LENGTH.equalsIgnoreCase(keyField)) {
+
+                        final long fileLength        = binary.length();
+                        final String maxLengthString = fieldVariable.value();
+                        final long maxLength         = ConversionUtils.toLongFromByteCountHumanDisplaySize(maxLengthString, -1l);
+
+                        if (-1 != maxLength && // if the user sets a valid value
+                                fileLength > maxLength) {
+
+                            final DotContentletValidationException cve =
+                                    new DotContentletValidationException(
+                                            Sneaky.sneak(()->LanguageUtil.get("message.contentlet.binary.file.exceeds.size", binary.getName(), UtilMethods.prettyByteify(maxLength))));
+                            Logger.warn(this, "Name of Binary field [" + fieldName + "] has a length: " + fileLength
+                                    + " but the max length is: " + maxLength);
+                            cve.addBadTypeField(legacyField);
+                            throw cve;
+                        }
+                    }
+                }
+            }
+        }
+    } // validateBinary.
+
+    private void validateHtmlPage(Contentlet contentlet, String contentIdentifier, ContentType contentType) {
+        if(contentlet.getHost()!=null && contentlet.getHost().equals(Host.SYSTEM_HOST) && (!UtilMethods.isSet(contentlet.getFolder()) || contentlet.getFolder().equals(FolderAPI.SYSTEM_FOLDER))){
+            final DotContentletValidationException cve = new FileAssetValidationException(Sneaky.sneak(()->LanguageUtil.get("message.contentlet.fileasset.invalid.hostfolder")));
+            Logger.warn(this, "HTML Page [" + contentIdentifier + "] cannot be created directly under System " +
+                    "Host");
+            cve.addBadTypeField(new LegacyFieldTransformer(contentType.fieldMap().get(FileAssetAPI
+                    .HOST_FOLDER_FIELD)).asOldField());
+            throw cve;
+        }
+        try{
+            final Host site = APILocator.getHostAPI().find(contentlet.getHost(), APILocator.getUserAPI().getSystemUser(), false);
+            Folder folder = null;
+            if(UtilMethods.isSet(contentlet.getFolder())){
+                folder=APILocator.getFolderAPI().find(contentlet.getFolder(), APILocator.getUserAPI().getSystemUser(), false);
+            }
+            else{
+                folder=APILocator.getFolderAPI().findSystemFolder();
+            }
+
+            //Get the URL from Identifier if it is not in Contentlet
+            String url = contentlet.getStringProperty(HTMLPageAssetAPI.URL_FIELD);
+
+            if(!UtilMethods.isSet(url)){
+
+                if (InodeUtils.isSet(contentlet.getVersionId()) || InodeUtils.isSet(contentlet.getInode())) {
+                    Identifier identifier = APILocator.getIdentifierAPI().find(contentlet);
+                    if (UtilMethods.isSet(identifier) && UtilMethods.isSet(identifier.getAssetName())) {
+
+                        url = identifier.getAssetName();
+                    }
+                }
+            }
+
+            if(UtilMethods.isSet(url)){
+                contentlet.setProperty(HTMLPageAssetAPI.URL_FIELD, url);
+                Identifier folderId = APILocator.getIdentifierAPI().find(folder);
+                String path = folder.getInode().equals(FolderAPI.SYSTEM_FOLDER)?"/"+url:folderId.getPath()+url;
+                Identifier htmlpage = APILocator.getIdentifierAPI().find(site, path);
+                if(htmlpage!=null && InodeUtils.isSet(htmlpage.getId()) && !htmlpage.getId().equals(contentlet.getIdentifier()) ){
+                    final String errorMsg = "Page URL [" + path + "] already exists with content ID [" + htmlpage
+                            .getId() + "]";
+                    final DotContentletValidationException cve = new FileAssetValidationException(errorMsg);
+                    Logger.warn(this, errorMsg);
+                    cve.addBadTypeField(new LegacyFieldTransformer(contentType.fieldMap().get(HTMLPageAssetAPI
+                            .URL_FIELD)).asOldField());
+                    throw cve;
+                }
+                UtilMethods.validateFileName(url);
+            }
+
+        } catch (final DotDataException | DotSecurityException | IllegalArgumentException e) {
+            final String errorMsg = "Contentlet [" + contentIdentifier + "] has an invalid URL: " + contentlet
+                    .getStringProperty(HTMLPageAssetAPI.URL_FIELD);
+            final DotContentletValidationException cve = new FileAssetValidationException(errorMsg);
+            Logger.warn(this, errorMsg);
+            cve.addBadTypeField(new LegacyFieldTransformer(contentType.fieldMap().get(HTMLPageAssetAPI
+                    .URL_FIELD)).asOldField());
+            throw cve;
+        }
+    }
+
+    private void validateFileAsset(final Contentlet contentlet, final String contentIdentifier, final ContentType contentType) {
+
+        if(contentlet.getHost()!=null && contentlet.getHost().equals(Host.SYSTEM_HOST) && (!UtilMethods.isSet(contentlet.getFolder()) || contentlet.getFolder().equals(FolderAPI.SYSTEM_FOLDER))){
+            final DotContentletValidationException cve = new FileAssetValidationException(Sneaky.sneak(()->LanguageUtil.get("message.contentlet.fileasset.invalid.hostfolder")));
+            Logger.warn(this, "File Asset [" + contentIdentifier + "] cannot be created directly under System " +
+                    "Host");
+            cve.addBadTypeField(new LegacyFieldTransformer(contentType.fieldMap().get(FileAssetAPI
+                    .HOST_FOLDER_FIELD)).asOldField());
+            throw cve;
+        }
+
+        //Enforce validation only if the file name isn't the same we've already got
+        if(hasNewIncomingFile(contentlet)){
+            boolean fileNameExists = false;
+            try {
+                final Host site = APILocator.getHostAPI ().find(contentlet.getHost(), APILocator.getUserAPI().getSystemUser(), false);
+                final Folder folder = UtilMethods.isSet(contentlet.getFolder())?
+                        APILocator.getFolderAPI().find(contentlet.getFolder(), APILocator.getUserAPI().getSystemUser(), false):
+                        APILocator.getFolderAPI().findSystemFolder();
+
+                String fileName = contentlet.getBinary(FileAssetAPI.BINARY_FIELD) != null ? contentlet.getBinary(FileAssetAPI.BINARY_FIELD).getName() : StringPool.BLANK;
+                if(UtilMethods.isSet(contentlet.getStringProperty("fileName"))){
+                    fileName = contentlet.getStringProperty("fileName");
+                }
+                if(UtilMethods.isSet(fileName)){
+                    fileNameExists = APILocator.getFileAssetAPI().fileNameExists(site, folder, fileName, contentlet.getIdentifier());
+                    if(!APILocator.getFolderAPI().matchFilter(folder, fileName)) {
+                        final DotContentletValidationException cve = new FileAssetValidationException(Sneaky.sneak(()->LanguageUtil.get("message.file_asset.error.filename.filters")));
+                        Logger.warn(this, "File Asset [" + contentIdentifier + "] does not match specified folder" +
+                                " file filters");
+                        cve.addBadTypeField(new LegacyFieldTransformer(contentType.fieldMap().get(FileAssetAPI
+                                .HOST_FOLDER_FIELD)).asOldField());
+                        throw cve;
+                    }
+                }
+
+            } catch (final Exception e) {
+                if(e instanceof FileAssetValidationException) {
+                    throw (FileAssetValidationException) e;
+                }
+                final String errorMsg = "Unable to validate field: " + FileAssetAPI.BINARY_FIELD + " in " +
+                        "contentlet [" + contentIdentifier + "]";
+                Logger.warn(this, errorMsg);
+                throw new FileAssetValidationException(errorMsg, e);
+            }
+            if(fileNameExists){
+                final DotContentletValidationException cve = new FileAssetValidationException(Sneaky.sneak(()->LanguageUtil.get("message.contentlet.fileasset.filename.already.exists")));
+                Logger.warn(this, "Name of File Asset [" + contentIdentifier + "] already exists");
+                cve.addBadTypeField(new LegacyFieldTransformer(contentType.fieldMap().get(FileAssetAPI
+                        .HOST_FOLDER_FIELD)).asOldField());
+                throw cve;
+            }
         }
     }
 
@@ -5406,10 +6644,7 @@ public class ESContentletAPIImpl implements ContentletAPI {
             }
         } catch (final DotContentletValidationException ve) {
             throw ve;
-        } catch (final DotSecurityException | DotDataException e) {
-            Logger.error(this, "Error validating contentlet [" + contentlet.getIdentifier() + "]: " + e.getMessage(),
-                    e);
-        }
+        } 
         validateRelationships(contentlet, contentRelationships);
     }
 
@@ -5445,12 +6680,11 @@ public class ESContentletAPIImpl implements ContentletAPI {
                 }
 
                 if (relationship.getCardinality() == RELATIONSHIP_CARDINALITY.ONE_TO_ONE
-                        .ordinal() && contentsInRelationship.size() > 1){
-                    Logger.error(this, "Error in Contentlet [" + contentletId + "]: Relationship [" + relationship
-                            .getRelationTypeValue() + "] has been defined as One to One");
-                    cve.addBadCardinalityRelationship(relationship, contentsInRelationship);
-                    hasError = true;
-                    continue;
+                        .ordinal() && contentsInRelationship.size() > 0){
+                    hasError |= !isValidOneToOneRelationship(contentlet, cve, relationship, contentsInRelationship);
+
+                    if (hasError)
+                        continue;
                 }
                 //There is a case when the Relationship is between same structures
                 //We need to validate that case
@@ -5497,14 +6731,6 @@ public class ESContentletAPIImpl implements ContentletAPI {
                                 Logger.error(this, error.toString());
                                 hasError = true;
                                 cve.addBadCardinalityRelationship(relationship, contentsInRelationship);
-                            } else if (relationship.getCardinality() == RELATIONSHIP_CARDINALITY.ONE_TO_ONE
-                                    .ordinal() && relatedContents.size() > 0 && !relatedContents.get(0).getIdentifier()
-                                    .equals(contentlet.getIdentifier())){
-                                Logger.error(this, "Error in related Contentlet [" + relatedContents.get(0).getIdentifier
-                                        () + "]: Relationship [" + relationship.getRelationTypeValue() + "] has been defined " +
-                                        "as One to One");
-                                cve.addBadCardinalityRelationship(relationship, contentsInRelationship);
-                                hasError = true;
                             }
 
                             if (!contentInRelationship.getContentTypeId().equalsIgnoreCase(relationship.getChildStructureInode())) {
@@ -5568,6 +6794,55 @@ public class ESContentletAPIImpl implements ContentletAPI {
         if (hasError){
             throw cve;
         }
+    }
+
+    /**
+     *
+     * @param contentlet
+     * @param cve
+     * @param relationship
+     * @param contentsInRelationship
+     * @return
+     */
+    private boolean isValidOneToOneRelationship(final Contentlet contentlet,
+            final DotContentletValidationException cve, final Relationship relationship,
+            final List<Contentlet> contentsInRelationship) {
+
+        //Trying to relate more than one piece of content
+        if (contentsInRelationship.size() > 1) {
+            Logger.error(this,
+                    "Error in Contentlet [" + contentlet.getIdentifier() + "]: Relationship ["
+                            + relationship
+                            .getRelationTypeValue()
+                            + "] has been defined as One to One");
+            cve.addBadCardinalityRelationship(relationship, contentsInRelationship);
+            return false;
+        }
+
+        //Trying to relate a piece of content that already exists to another relationship
+        try {
+            List<Contentlet> relatedContents = getRelatedContent(
+                    contentsInRelationship.get(0), relationship, null,
+                    APILocator.getUserAPI()
+                            .getSystemUser(), true);
+            if (relatedContents.size() > 0 && !relatedContents.get(0).getIdentifier()
+                    .equals(contentlet.getIdentifier())) {
+                Logger.error(this,
+                        "Error in related Contentlet [" + relatedContents.get(0)
+                                .getIdentifier
+                                        () + "]: Relationship [" + relationship
+                                .getRelationTypeValue() + "] has been defined " +
+                                "as One to One");
+                cve.addBadCardinalityRelationship(relationship, contentsInRelationship);
+                return false;
+            }
+        } catch (final DotSecurityException | DotDataException e) {
+            Logger.error(this, "An error occurred when retrieving information from related Contentlet" +
+                    " [" + contentsInRelationship.get(0).getIdentifier() + "]", e);
+            cve.addInvalidContentRelationship(relationship, contentsInRelationship);
+            return false;
+        }
+        return true;
     }
 
     @Override
@@ -5886,9 +7161,16 @@ public class ESContentletAPIImpl implements ContentletAPI {
 
         Contentlet con = contentFactory.find(contentletInode);
 
-        if(!permissionAPI.doesUserHavePermission(con,PermissionAPI.PERMISSION_READ,user))
-            throw new DotSecurityException("Unauthorized Access");
-
+        if (!permissionAPI.doesUserHavePermission(con, PermissionAPI.PERMISSION_READ, user)) {
+            if (null != user) {
+                throw new DotSecurityException(String.format(
+                        "Unauthorized Access user [%s , %s] trying to access contentlet identified by `%s`.",
+                        user.getUserId(), user.getEmailAddress(), con.getIdentifier()));
+            } else {
+                throw new DotSecurityException(
+                        "Unauthorized Access null user trying to access contentlet. ");
+            }
+        }
 
         File binaryFile = null;
         String binaryFilePath = null;
@@ -5980,7 +7262,7 @@ public class ESContentletAPIImpl implements ContentletAPI {
      * source contentlet points to image A and resulting new contentlet will
      * point to same image A as well, also copies source permissions.
      *
-     * @param contentletToCopy
+     * @param sourceContentlet
      *            - The contentlet that will be copied to the new destination.
      * @param host
      *            - The destination host.
@@ -6005,14 +7287,16 @@ public class ESContentletAPIImpl implements ContentletAPI {
      */
     @WrapInTransaction
     @Override
-    public Contentlet copyContentlet(Contentlet contentletToCopy, Host host, Folder folder, User user, final String copySuffix, boolean respectFrontendRoles) throws DotDataException, DotSecurityException, DotContentletStateException {
-        Contentlet resultContentlet = new Contentlet();
+    public Contentlet copyContentlet(final Contentlet sourceContentlet, final Host host, final Folder folder, final User user, final String copySuffix, final boolean respectFrontendRoles) throws DotDataException, DotSecurityException, DotContentletStateException {
+        
+        final Map<String, HTMLPageAssetAPI.TemplateContainersReMap> templateMappings = (Map<String, TemplateContainersReMap>) sourceContentlet.get(Contentlet.TEMPLATE_MAPPINGS);
+        Contentlet copyContentlet = new Contentlet();
         String newIdentifier = StringPool.BLANK;
-        ArrayList<Contentlet> versionsToCopy = new ArrayList<>();
         List<Contentlet> versionsToMarkWorking = new ArrayList<>();
         Map<String, Map<String, Contentlet>> contentletsToCopyRules = Maps.newHashMap();
-        final Identifier sourceContentletIdentifier = APILocator.getIdentifierAPI().find(contentletToCopy.getIdentifier());
-        versionsToCopy.addAll(findAllVersions(sourceContentletIdentifier, false, user, respectFrontendRoles));
+        final Identifier sourceContentletIdentifier = APILocator.getIdentifierAPI().find(sourceContentlet.getIdentifier());
+        List<Contentlet> versionsToCopy = new ArrayList<>(
+                findAllVersions(sourceContentletIdentifier, false, user, respectFrontendRoles));
 
         // we need to save the versions from older-to-newer to make sure the last save
         // is the current version
@@ -6020,8 +7304,9 @@ public class ESContentletAPIImpl implements ContentletAPI {
 
         for(Contentlet contentlet : versionsToCopy){
 
-            boolean isContentletLive = false;
-            boolean isContentletWorking = false;
+            final boolean isContentletLive = contentlet.isLive();
+            final boolean isContentletWorking = contentlet.isWorking();
+            final boolean isContentletDeleted = contentlet.isArchived();
 
             if (user == null) {
                 throw new DotSecurityException("A user must be specified.");
@@ -6036,17 +7321,12 @@ public class ESContentletAPIImpl implements ContentletAPI {
             newContentlet.setStructureInode(contentlet.getStructureInode());
             copyProperties(newContentlet, contentlet.getMap(),true);
 
-            if(contentlet.isLive())
-                isContentletLive = true;
-            if(contentlet.isWorking())
-                isContentletWorking = true;
-
             newContentlet.setInode(StringPool.BLANK);
             newContentlet.setIdentifier(StringPool.BLANK);
             newContentlet.setHost(host != null?host.getIdentifier(): (folder!=null? folder.getHostId() : contentlet.getHost()));
             newContentlet.setFolder(folder != null?folder.getInode(): null);
             newContentlet.setLowIndexPriority(contentlet.isLowIndexPriority());
-            final boolean copyingSite = (!newContentlet.getHost().equals(contentletToCopy.getHost()));
+            final boolean copyingSite = (!newContentlet.getHost().equals(sourceContentlet.getHost()));
             if(contentlet.isFileAsset()){
                 final String newName = generateCopyName(newContentlet.getStringProperty(FileAssetAPI.FILE_NAME_FIELD), copySuffix);
                 newContentlet.setStringProperty(FileAssetAPI.FILE_NAME_FIELD, newName);
@@ -6063,9 +7343,13 @@ public class ESContentletAPIImpl implements ContentletAPI {
                 newContentlet.setStringProperty(Contentlet.CONTENTLET_ASSET_NAME_COPY, newIdentifierName);
             }
 
+            final String temporalFolder =
+                    APILocator.getFileAssetAPI().getRealAssetPathTmpBinary() + File.separator
+                            + UUIDGenerator.generateUuid();
+
             List <Field> fields = FieldsCache.getFieldsByStructureInode(contentlet.getStructureInode());
             File srcFile;
-            File destFile = new File(APILocator.getFileAssetAPI().getRealAssetPathTmpBinary() + File.separator + user.getUserId());
+            File destFile = new File(temporalFolder);
             if (!destFile.exists())
                 destFile.mkdirs();
 
@@ -6081,7 +7365,7 @@ public class ESContentletAPIImpl implements ContentletAPI {
                             }else{
                                 fieldValue=srcFile.getName();
                             }
-                            destFile = new File(APILocator.getFileAssetAPI().getRealAssetPathTmpBinary() + File.separator + user.getUserId() + File.separator + fieldValue);
+                            destFile = new File(temporalFolder + File.separator + fieldValue);
                             if (!destFile.exists())
                                 destFile.createNewFile();
 
@@ -6116,7 +7400,7 @@ public class ESContentletAPIImpl implements ContentletAPI {
             } else{
                 destinationHostId = contentlet.getHost();
             }
-            if(contentletToCopy.getHost().equals(destinationHostId)){
+            if(sourceContentlet.getHost().equals(destinationHostId)){
                 ContentletRelationships cr = getAllRelationships(contentlet);
                 List<ContentletRelationshipRecords> rr = cr.getRelationshipsRecords();
                 for (ContentletRelationshipRecords crr : rr) {
@@ -6124,15 +7408,20 @@ public class ESContentletAPIImpl implements ContentletAPI {
                 }
             }
 
-
-
             //Set URL in the new contentlet because is needed to create Identifier in EscontentletAPI.
             if(contentlet.isHTMLPage()){
-                final Template template = APILocator.getTemplateAPI().findWorkingTemplate(contentlet.getStringProperty(HTMLPageAssetAPI.TEMPLATE_FIELD),user,false);
-                if(template.isAnonymous()){//If the Template has a custom layout we need to create a copy of it, so when is modified it does not modify the other pages.
-                    final Template copiedTemplate = APILocator.getTemplateAPI().copy(template,user);
-                    newContentlet.setStringProperty(HTMLPageAssetAPI.TEMPLATE_FIELD, copiedTemplate.getIdentifier());
+                final String sourceTemplateId = contentlet.getStringProperty(HTMLPageAssetAPI.TEMPLATE_FIELD);
+                if (null != templateMappings && templateMappings.containsKey(sourceTemplateId)) {
+                    final Template destinationTemplate = templateMappings.get(sourceTemplateId).getDestinationTemplate();
+                    newContentlet.setStringProperty(HTMLPageAssetAPI.TEMPLATE_FIELD, destinationTemplate.getIdentifier());
+                } else {
+                    final Template template = APILocator.getTemplateAPI().findWorkingTemplate(sourceTemplateId, user, false);
+                    if (template.isAnonymous()) {//If the Template has a custom layout we need to create a copy of it, so when is modified it does not modify the other pages.
+                        final Template copiedTemplate = APILocator.getTemplateAPI().copy(template, user);
+                        newContentlet.setStringProperty(HTMLPageAssetAPI.TEMPLATE_FIELD, copiedTemplate.getIdentifier());
+                    }
                 }
+
                 Identifier identifier = APILocator.getIdentifierAPI().find(contentlet);
                 if(UtilMethods.isSet(identifier) && UtilMethods.isSet(identifier.getAssetName())){
                     final String newAssetName = generateCopyName(identifier.getAssetName(), copySuffix);
@@ -6145,14 +7434,17 @@ public class ESContentletAPIImpl implements ContentletAPI {
             newContentlet.getMap().put(Contentlet.DISABLE_WORKFLOW, true);
             newContentlet.getMap().put(Contentlet.DONT_VALIDATE_ME, true);
             newContentlet.getMap().put(Contentlet.IS_COPY_CONTENTLET, true);
+            newContentlet.setIndexPolicy(sourceContentlet.getIndexPolicy());
+
             // Use the generated identifier if one version of this contentlet
             // has already been checked in
             if (UtilMethods.isSet(newIdentifier)) {
                 newContentlet.setIdentifier(newIdentifier);
             }
             newContentlet = checkin(newContentlet, rels, parentCats, permissionAPI.getPermissions(contentlet), user, respectFrontendRoles);
-            if(!UtilMethods.isSet(newIdentifier))
+            if(!UtilMethods.isSet(newIdentifier)){
                 newIdentifier = newContentlet.getIdentifier();
+            }
 
             permissionAPI.copyPermissions(contentlet, newContentlet);
 
@@ -6166,15 +7458,19 @@ public class ESContentletAPIImpl implements ContentletAPI {
                 contentletsToCopyRules.put(contentlet.getIdentifier(), contentletMap);
             }
 
-            if(isContentletLive)
+            if(isContentletLive){
                 APILocator.getVersionableAPI().setLive(newContentlet);
+            }
 
-            if(isContentletWorking)
+            if(isContentletWorking) {
                 versionsToMarkWorking.add(newContentlet);
-
-
-            if(contentlet.getInode().equals(contentletToCopy.getInode()))
-                resultContentlet = newContentlet;
+            }
+            if (isContentletDeleted) {
+                APILocator.getVersionableAPI().setDeleted(newContentlet, true);
+            }
+            if(contentlet.getInode().equals(sourceContentlet.getInode())){
+                copyContentlet = newContentlet;
+            }
         }
 
         for (Map<String, Contentlet> stringContentletMap : contentletsToCopyRules.values()) {
@@ -6187,59 +7483,53 @@ public class ESContentletAPIImpl implements ContentletAPI {
             }
         }
 
-        for(Contentlet con : versionsToMarkWorking){
+        for(final Contentlet con : versionsToMarkWorking){
             APILocator.getVersionableAPI().setWorking(con);
         }
 
-        if (contentletToCopy.isHTMLPage()) {
-            // If the content is an HTML Page then copy page associated contentlets
-            final List<MultiTree> pageContents = APILocator.getMultiTreeAPI().getMultiTrees(contentletToCopy.getIdentifier());
-            for (final MultiTree multitree : pageContents) {
-
-                APILocator.getMultiTreeAPI().saveMultiTree(new MultiTree(resultContentlet.getIdentifier(),
-                        multitree.getContainer(),
-                        multitree.getContentlet(),
-                        MultiTree.LEGACY_RELATION_TYPE,
-                        multitree.getTreeOrder()));
+        if (sourceContentlet.isHTMLPage()) {
+            final boolean copyingSite = (!copyContentlet.getHost().equals(sourceContentlet.getHost()));
+            if (!copyingSite) { // We only want to execute this logic if we're not copying a whole site.
+                // If the content is an HTML Page then copy page associated contentlets
+                final List<MultiTree> pageContents = APILocator.getMultiTreeAPI()
+                        .getMultiTrees(sourceContentlet.getIdentifier());
+                for (final MultiTree multitree : pageContents) {
+                    APILocator.getMultiTreeAPI()
+                            .saveMultiTree(new MultiTree(copyContentlet.getIdentifier(),
+                                    multitree.getContainer(),
+                                    multitree.getContentlet(),
+                                    multitree.getRelationType(),
+                                    multitree.getTreeOrder(),
+                                    multitree.getPersonalization()));
+                }
             }
         }
 
         // copy the workflow state
-        WorkflowTask task = APILocator.getWorkflowAPI().findTaskByContentlet(contentletToCopy);
-        if(task!=null) {
-            WorkflowTask newTask=new WorkflowTask();
+        final WorkflowTask task = APILocator.getWorkflowAPI().findTaskByContentlet(sourceContentlet);
+        if(null != task) {
+
+            final WorkflowTask newTask = new WorkflowTask();
             BeanUtils.copyProperties(task, newTask);
             newTask.setId(null);
-            newTask.setWebasset(resultContentlet.getIdentifier());
-            newTask.setLanguageId(resultContentlet.getLanguageId());
-
+            newTask.setWebasset(copyContentlet.getIdentifier());
+            newTask.setLanguageId(copyContentlet.getLanguageId());
             APILocator.getWorkflowAPI().saveWorkflowTask(newTask);
 
-            for(WorkflowComment comment : APILocator.getWorkflowAPI().findWorkFlowComments(task)) {
-                WorkflowComment newComment=new WorkflowComment();
-                BeanUtils.copyProperties(comment, newComment);
-                newComment.setId(null);
-                newComment.setWorkflowtaskId(newTask.getId());
-                APILocator.getWorkflowAPI().saveComment(newComment);
-            }
 
-            for(WorkflowHistory history : APILocator.getWorkflowAPI().findWorkflowHistory(task)) {
-                WorkflowHistory newHistory=new WorkflowHistory();
-                BeanUtils.copyProperties(history, newHistory);
-                newHistory.setId(null);
-                newHistory.setWorkflowtaskId(newTask.getId());
-                APILocator.getWorkflowAPI().saveWorkflowHistory(newHistory);
-            }
+            final WorkflowComment newComment = new WorkflowComment();
+            newComment.setPostedBy(user.getUserId());
+            newComment.setComment("Content copied from content id: " + sourceContentlet.getIdentifier());
+            newComment.setCreationDate(new Date());
+            newComment.setWorkflowtaskId(newTask.getId());
+            APILocator.getWorkflowAPI().saveComment(newComment);
+            
 
-            List<IFileAsset> files = APILocator.getWorkflowAPI().findWorkflowTaskFilesAsContent(task, APILocator.getUserAPI().getSystemUser());
-            for(IFileAsset f : files) {
-                APILocator.getWorkflowAPI().attachFileToTask(newTask, f.getInode());
-            }
         }
 
-        this.sendCopyEvent(resultContentlet);
+        this.sendCopyEvent(copyContentlet);
 
-        return resultContentlet;
+        return copyContentlet;
     }
 
     private String generateCopyName(final String originalName, final String copySuffix) {
@@ -6351,7 +7641,7 @@ public class ESContentletAPIImpl implements ContentletAPI {
             }
         } else {
             if(isContentletUrlAlreadyUsed(contentlet, host, folder, assetNameSuffix)) {
-                throw new DotDataException("error.copy.url.conflict");
+                throw new DotDataException(Sneaky.sneak(()->LanguageUtil.get("error.copy.url.conflict")));
             }
         }
 
@@ -6493,7 +7783,7 @@ public class ESContentletAPIImpl implements ContentletAPI {
     }
 
     private boolean isInodeIndexedWithQuery(String luceneQuery) {
-        return isInodeIndexedWithQuery(luceneQuery, -1);
+        return isInodeIndexedWithQuery(luceneQuery + " " + UUIDGenerator.shorty(), -1);
     }
 
     private final List<Integer> fibonacciMapping = Arrays.asList(1, 2, 3, 5, 8, 13, 21, 34, 55); // it is around 14 + 9 (by the timeout delay) seconds, enough to wait
@@ -6501,14 +7791,13 @@ public class ESContentletAPIImpl implements ContentletAPI {
     private boolean isInodeIndexedWithQuery(final String luceneQuery,
                                             final int milliSecondsToWait) {
 
-        final long indexTimeOut    = Config.getLongProperty("TIMEOUT_INDEX_COUNT", 1000);
         final long millistoWait    = Config.getLongProperty("IS_NODE_INDEXED_INDEX_MILLIS_WAIT", 100);
         final int limit            = - 1 != milliSecondsToWait?milliSecondsToWait: 300;
         boolean   found            = false;
         int       counter          = 0;
         int       fibonacciIndex   = 0;
 
-        if (this.contentFactory.indexCount(luceneQuery, indexTimeOut) > 0) {
+        if (this.contentFactory.indexCount(luceneQuery) > 0) {
 
             if (ConfigUtils.isDevMode()) {
                 Logger.info(this, ()-> "******>>>>>> Index count found in the fist hit for the query: " + luceneQuery);
@@ -6523,7 +7812,7 @@ public class ESContentletAPIImpl implements ContentletAPI {
 
                 try {
 
-                    found = this.contentFactory.indexCount(luceneQuery, indexTimeOut) > 0;
+                    found = this.contentFactory.indexCount(luceneQuery) > 0;
                 } catch (Exception e) {
                     Logger.error(this.getClass(), e.getMessage(), e);
                     return false;
@@ -6657,7 +7946,7 @@ public class ESContentletAPIImpl implements ContentletAPI {
             throws IllegalArgumentException,DotDataException,DotSecurityException, DotContentletStateException, DotContentletValidationException {
 
         if (!InodeUtils.isSet(contentlet.getInode())) {
-            return checkin(contentlet, contentletRelationships, cats, permissions, user, false);
+            return checkin(contentlet, contentletRelationships, cats, permissions, user, respectFrontendRoles);
         } else {
             canLock(contentlet, user);
             //get the latest and greatest from db
@@ -6676,7 +7965,7 @@ public class ESContentletAPIImpl implements ContentletAPI {
                 if (working.getInode().equals(contentlet.getInode())) {
 
                     return checkin(contentlet, contentletRelationships, cats ,
-                            user, false, false, false);
+                            user, respectFrontendRoles, false, false);
 
                 } else {
                     final String workingInode = working.getInode();
@@ -6684,14 +7973,14 @@ public class ESContentletAPIImpl implements ContentletAPI {
                     working.setInode(workingInode);
                     working.setModUser(user.getUserId());
                     return checkin(contentlet, contentletRelationships, cats ,
-                            user, false, false, false);
+                            user, respectFrontendRoles, false, false);
                 }
             }
 
             contentlet.setInode(null);
             return checkin(contentlet, contentletRelationships,
                     cats,
-                    permissions, user, false);
+                    permissions, user, respectFrontendRoles);
         }
     }
 
@@ -6749,47 +8038,54 @@ public class ESContentletAPIImpl implements ContentletAPI {
     }
 
     @Override
-    public boolean canLock(Contentlet contentlet, User user)
+    public boolean canLock(final Contentlet contentlet, final User user)
             throws DotLockException {
         return canLock(contentlet, user, false);
     }
 
     @CloseDBIfOpened
     @Override
-    public boolean canLock(Contentlet contentlet, User user, boolean respectFrontendRoles) throws   DotLockException {
-        if(contentlet ==null || !UtilMethods.isSet(contentlet.getIdentifier())){
+    public boolean canLock(final Contentlet contentlet, final User user, final boolean respectFrontendRoles) throws DotLockException {
+
+        if(contentlet ==null || !UtilMethods.isSet(contentlet.getIdentifier())) {
+
             return true;
         }
-        if(user ==null){
+
+        if(user ==null) {
+
             throw new DotLockException("null User cannot lock content");
         }
 
-        try{
-            if(APILocator.getRoleAPI().doesUserHaveRole(user, APILocator.getRoleAPI().loadCMSAdminRole())){
+        try {
+
+            if(APILocator.getRoleAPI().doesUserHaveRole(user, APILocator.getRoleAPI().loadCMSAdminRole())) {
+
                 return true;
-            }
-            else if(!APILocator.getPermissionAPI().doesUserHavePermission(contentlet, PermissionAPI.PERMISSION_EDIT, user, respectFrontendRoles)){
+            } else if(!APILocator.getPermissionAPI().doesUserHavePermission(
+                            contentlet, PermissionAPI.PERMISSION_EDIT, user, respectFrontendRoles)) {
+
                 throw new DotLockException("User: "+ (user != null ? user.getUserId() : "Unknown")
                         +" does not have Edit Permissions to lock content: " + (contentlet != null ? contentlet.getIdentifier() : "Unknown"));
             }
-        }catch(DotDataException dde){
+        }catch(DotDataException dde) {
+
             throw new DotLockException("User: "+ (user != null ? user.getUserId() : "Unknown")
                     +" does not have Edit Permissions to lock content: " + (contentlet != null ? contentlet.getIdentifier() : "Unknown"));
         }
 
-
-        String lockedBy =null;
-        try{
-            lockedBy=APILocator.getVersionableAPI().getLockedBy(contentlet);
-        }
-        catch(Exception e){
+        Optional<String> lockedBy = Optional.empty();
+        try {
+            lockedBy = APILocator.getVersionableAPI().getLockedBy(contentlet);
+        } catch(Exception e) {
 
         }
-        if(lockedBy != null && !user.getUserId().equals(lockedBy)){
+
+        if(lockedBy.isPresent() && !user.getUserId().equals(lockedBy.get())){
             throw new DotLockException(CANT_GET_LOCK_ON_CONTENT);
         }
-        return true;
 
+        return true;
     }
 
     @CloseDBIfOpened
@@ -6926,16 +8222,17 @@ public class ESContentletAPIImpl implements ContentletAPI {
      * @param user
      *            - The currently logged in user.
      */
-    private void logContentletActivity(Contentlet contentlet,
-                                       String description, User user) {
+    private void logContentletActivity(final Contentlet contentlet,
+                                       final String description, final User user) {
+
         String contentPushPublishDate = contentlet
-                .getStringProperty("wfPublishDate");
+                .getStringProperty(Contentlet.WORKFLOW_PUBLISH_DATE);
         String contentPushPublishTime = contentlet
-                .getStringProperty("wfPublishTime");
+                .getStringProperty(Contentlet.WORKFLOW_PUBLISH_TIME);
         String contentPushExpireDate = contentlet
-                .getStringProperty("wfExpireDate");
+                .getStringProperty(Contentlet.WORKFLOW_EXPIRE_DATE);
         String contentPushExpireTime = contentlet
-                .getStringProperty("wfExpireTime");
+                .getStringProperty(Contentlet.WORKFLOW_EXPIRE_TIME);
         contentPushPublishDate = UtilMethods.isSet(contentPushPublishDate) ? contentPushPublishDate
                 : "N/A";
         contentPushPublishTime = UtilMethods.isSet(contentPushPublishTime) ? contentPushPublishTime
@@ -7005,7 +8302,7 @@ public class ESContentletAPIImpl implements ContentletAPI {
             contentlet.setIndexPolicyDependencies(contentletDependencies.getIndexPolicyDependencies());
         }
 
-        return checkin(contentlet, contentletDependencies.getRelationships(), contentletDependencies.getCategories(), null, contentletDependencies.getModUser(),
+        return checkin(contentlet, contentletDependencies.getRelationships(), contentletDependencies.getCategories(), contentletDependencies.getPermissions(), contentletDependencies.getModUser(),
                 contentletDependencies.isRespectAnonymousPermissions(), contentletDependencies.isGenerateSystemEvent());
     }
 
@@ -7110,5 +8407,4 @@ public class ESContentletAPIImpl implements ContentletAPI {
         return contentlet;
     }
 
-    
 }

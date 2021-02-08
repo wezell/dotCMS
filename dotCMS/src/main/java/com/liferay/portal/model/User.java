@@ -22,13 +22,11 @@
 
 package com.liferay.portal.model;
 
-import java.lang.reflect.InvocationTargetException;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.Locale;
-import java.util.Map;
-import java.util.TimeZone;
-
+import com.dotcms.business.CloseDBIfOpened;
+import com.dotmarketing.business.APILocator;
+import com.dotmarketing.business.DotStateException;
+import com.dotmarketing.business.Role;
+import com.dotmarketing.business.UserAPI;
 import com.dotmarketing.portlets.user.ajax.UserAjax;
 import com.dotmarketing.util.UtilMethods;
 import com.fasterxml.jackson.annotation.JsonIgnore;
@@ -38,6 +36,15 @@ import com.liferay.util.LocaleUtil;
 import com.liferay.util.StringPool;
 import com.liferay.util.StringUtil;
 import com.liferay.util.Validator;
+import io.vavr.control.Try;
+import org.apache.commons.codec.digest.DigestUtils;
+
+import java.lang.reflect.InvocationTargetException;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.Locale;
+import java.util.Map;
+import java.util.TimeZone;
 
 /**
  * <a href="User.java.html"><b><i>View Source</i></b></a>
@@ -296,6 +303,70 @@ public class User extends UserModel implements Recipient {
         setModified(true);
     }
 
+  public boolean isAnonymousUser(){
+      return UserAPI.CMS_ANON_USER_ID.equals(this.getUserId());
+  }
+
+
+	/**
+	 * Returns true if the user is an admin
+	 * @return boolean
+	 */
+	public boolean isAdmin() {
+
+		return Try.of(() -> {
+			if (isAnonymousUser()) {
+				return false;
+			}
+			return (APILocator.getRoleAPI().doesUserHaveRole(this, APILocator.getRoleAPI().loadCMSAdminRole()));
+
+		}).getOrElse(false);
+
+	}
+
+  public boolean isBackendUser() {
+
+    return Try.of(() -> {
+      if (isAnonymousUser()) {
+        return false;
+      }
+      return (APILocator.getRoleAPI().doesUserHaveRole(this, APILocator.getRoleAPI().loadBackEndUserRole()));
+
+    }).getOrElse(false);
+
+  }
+
+  public boolean isFrontendUser() {
+
+    return Try.of(() -> {
+      if (isAnonymousUser()) {
+        return true;
+      }
+      return (APILocator.getRoleAPI().doesUserHaveRole(this, APILocator.getRoleAPI().loadFrontEndUserRole()));
+
+    }).getOrElse(false);
+
+  }
+
+
+  @JsonIgnore
+  public Role getUserRole() {
+
+      return Try.of(() -> APILocator.getRoleAPI().loadRoleByKey(this.getUserId())).getOrElseThrow(e->new DotStateException("Unable to find user role for user:" + this.getUserId()));
+
+    }
+  
+  public boolean hasConsoleAccess() {
+    return Try.of(() -> {
+      if (isAnonymousUser() || UserAPI.SYSTEM_USER_ID.equals(this.getUserId()) ) {
+        return false;
+      }
+      return isActive() && isBackendUser() && !APILocator.getLayoutAPI().loadLayoutsForUser(this).isEmpty();
+
+    }).getOrElse(false);
+
+  }
+
     public Map<String, Object> toMap() throws IllegalAccessException, InvocationTargetException, NoSuchMethodException {
         Map<String, Object> map = new HashMap<String, Object>();
         map.put("active", this.getActive());
@@ -319,20 +390,19 @@ public class User extends UserModel implements Recipient {
         map.put("middleName", this.getMiddleName());
         map.put("female", this.getFemale());
         map.put("nickname", this.getNickName());
-        map.put("userId", this.getUserId());
         map.put("timeZoneId", this.getTimeZoneId());
         map.put("deleteInProgress", getDeleteInProgress());
         map.put("deleteDate", getDeleteDate());
-        map.put("userId", getUserId());
         map.put("passwordExpirationDate", getPasswordExpirationDate());
         map.put("passwordExpired", isPasswordExpired());
         map.put("passwordReset", isPasswordReset());
         map.put("userId", getUserId());
-        map.put("id", getUserId());
-        map.put("name", getFullName());
+        map.put("backendUser", isBackendUser());
+        map.put("frontendUser", isFrontendUser());
+        map.put("hasConsoleAccess", hasConsoleAccess());
         map.put("id", getUserId());
         map.put("type", UserAjax.USER_TYPE_VALUE);
-
+        map.put("gravitar", DigestUtils.md5Hex(this.getEmailAddress().toLowerCase()).toString());
 
         return map;
     }

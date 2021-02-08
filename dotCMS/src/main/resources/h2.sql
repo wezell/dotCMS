@@ -1256,6 +1256,34 @@ create table workflow_task (
    language_id bigint,
    primary key (id)
 );
+
+create table workflow_action_mappings (
+   id varchar(36) not null,
+   action varchar(36) not null,
+   workflow_action varchar(255) not null,
+   scheme_or_content_type  varchar(255) not null,
+   primary key (id)
+);
+
+CREATE UNIQUE INDEX idx_workflow_action_mappings ON workflow_action_mappings (action, workflow_action, scheme_or_content_type);
+
+insert into workflow_action_mappings(id, action, workflow_action, scheme_or_content_type)
+values ('3d6be719-6b61-4ef8-a594-a9764e461597','NEW'      ,'ceca71a0-deee-4999-bd47-b01baa1bcfc8','d61a59e1-a49c-46f2-a929-db2b4bfa88b2');
+insert into workflow_action_mappings(id, action, workflow_action, scheme_or_content_type)
+values ('63865890-c863-43a1-ab61-4b495dba5eb5','EDIT'     ,'ceca71a0-deee-4999-bd47-b01baa1bcfc8','d61a59e1-a49c-46f2-a929-db2b4bfa88b2');
+insert into workflow_action_mappings(id, action, workflow_action, scheme_or_content_type)
+values ('2016a72e-85c7-4ee0-936f-36ce52df355e','PUBLISH'  ,'000ec468-0a63-4283-beb7-fcb36c107b2f','d61a59e1-a49c-46f2-a929-db2b4bfa88b2');
+insert into workflow_action_mappings(id, action, workflow_action, scheme_or_content_type)
+values ('3ec446c8-a9b6-47fe-830f-1e623493090c','UNPUBLISH','38efc763-d78f-4e4b-b092-59cd8c579b93','d61a59e1-a49c-46f2-a929-db2b4bfa88b2');
+insert into workflow_action_mappings(id, action, workflow_action, scheme_or_content_type)
+values ('e7b8c8a3-e605-473c-8680-6d95cac15c9b','ARCHIVE'  ,'4da13a42-5d59-480c-ad8f-94a3adf809fe','d61a59e1-a49c-46f2-a929-db2b4bfa88b2');
+insert into workflow_action_mappings(id, action, workflow_action, scheme_or_content_type)
+values ('99019118-df2c-4297-a5aa-2fe3fe0f52ce','UNARCHIVE','c92f9aa1-9503-4567-ac30-d3242b54d02d','d61a59e1-a49c-46f2-a929-db2b4bfa88b2');
+insert into workflow_action_mappings(id, action, workflow_action, scheme_or_content_type)
+values ('d073436e-3c10-4e4c-8c97-225e9cddf320','DELETE'   ,'777f1c6b-c877-4a37-ba4b-10627316c2cc','d61a59e1-a49c-46f2-a929-db2b4bfa88b2');
+insert into workflow_action_mappings(id, action, workflow_action, scheme_or_content_type)
+values ('3d73437e-3f1c-8e5c-ac97-a25e9cddf320','DESTROY'  ,'1e0f1c6b-b67f-4c99-983d-db2b4bfa88b2','d61a59e1-a49c-46f2-a929-db2b4bfa88b2');
+
 create table tag_inode (
    tag_id varchar(100) not null,
    inode varchar(100) not null,
@@ -2040,6 +2068,7 @@ alter table workflow_task add constraint FK_workflow_task_language foreign key (
 alter table workflow_task add constraint FK_workflow_task_asset foreign key (webasset) references identifier(id);
 alter table workflow_task add constraint FK_workflow_assign foreign key (assigned_to) references cms_role(id);
 alter table workflow_task add constraint FK_workflow_step foreign key (status) references workflow_step(id);
+alter table workflow_task add constraint unique_workflow_task unique (webasset,language_id);
 alter table workflow_step add constraint fk_escalation_action foreign key (escalation_action) references workflow_action(id);
 
 
@@ -2057,7 +2086,7 @@ ALTER TABLE tag ALTER COLUMN user_id TYPE text;
 
 -- ****** Indicies Data Storage *******
 create table indicies (
-  index_name varchar(30) primary key,
+  index_name varchar(100) primary key,
   index_type varchar(16) not null unique
 );
 -- ****** Log Console Table *******
@@ -2154,7 +2183,9 @@ create table publishing_bundle(
   name varchar(255) NOT NULL,
   publish_date TIMESTAMP,
   expire_date TIMESTAMP,
-  owner varchar(100)
+  owner varchar(100),
+  force_push bool,
+  filter_key varchar(100)
 );
 
 ALTER TABLE publishing_bundle ADD CONSTRAINT FK_publishing_bundle_owner FOREIGN KEY (owner) REFERENCES user_(userid);
@@ -2182,22 +2213,18 @@ CREATE INDEX idx_pushed_assets_1 ON publishing_pushed_assets (bundle_id);
 CREATE INDEX idx_pushed_assets_2 ON publishing_pushed_assets (environment_id);
 CREATE INDEX idx_pushed_assets_3 ON publishing_pushed_assets (asset_id, environment_id);
 
-alter table publishing_bundle add force_push bool ;
-
 CREATE INDEX idx_pub_qa_1 ON publishing_queue_audit (status);
 
 
 -- Cluster Tables
 
-CREATE TABLE dot_cluster(cluster_id varchar(36), PRIMARY KEY (cluster_id) );
+CREATE TABLE dot_cluster(cluster_id varchar(36), cluster_salt VARCHAR(256), PRIMARY KEY (cluster_id) );
 CREATE TABLE cluster_server(server_id varchar(36) primary key, cluster_id varchar(36) NOT NULL, name varchar(100), ip_address varchar(39) NOT NULL, host varchar(255), cache_port int, es_transport_tcp_port int, es_network_port int, es_http_port int, key_ varchar(100));
 ALTER TABLE cluster_server add constraint fk_cluster_id foreign key (cluster_id) REFERENCES dot_cluster(cluster_id);
 CREATE TABLE cluster_server_uptime(id varchar(36) primary key, server_id varchar(36) references cluster_server(server_id), startup TIMESTAMP, heartbeat TIMESTAMP);
 ALTER TABLE cluster_server_uptime add constraint fk_cluster_server_id foreign key (server_id) REFERENCES cluster_server(server_id);
 
 
-
-CREATE ALIAS load_records_to_index FOR "com.dotcms.h2.H2Procedure.loadRecordsToIndex";
 CREATE ALIAS dotFolderPath FOR "com.dotcms.h2.H2Procedure.dotFolderPath";
 CREATE TRIGGER rename_folder_assets_trigger AFTER UPDATE ON Folder FOR EACH ROW CALL "com.dotcms.h2.FolderRenameTrigger";
 CREATE TRIGGER check_child_assets_trigger BEFORE DELETE ON identifier FOR EACH ROW CALL "com.dotcms.h2.CheckChildAssetTrigger";

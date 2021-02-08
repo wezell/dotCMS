@@ -356,6 +356,7 @@
 			showDotCMSSystemMessage("<%=LanguageUtil.get(pageContext, "Please-select-an-action")%>", true);
 			return;
 		}
+
 		dojo.byId("wfActionId").value =actionId;
 
 		var hasChecks = false;
@@ -375,49 +376,133 @@
 
 		}
 
-
 		dojo.byId("wfCons").value=cons;
 
-
-		actionStore.fetch({query: {id:actionId}, onComplete:function(item){
-			if(item[0].assignable =="true" || item[0].commentable == "true"){
-
-                //Required clean up as these modals has duplicated widgets and collide without a clean up
-                var remoteDia = dijit.byId("remotePublisherDia");
-                if(remoteDia){
-                    remoteDia.destroyRecursive();
-                }
-
-				var dia = dijit.byId("contentletWfDialog");
-    			if(dia){
-    				dia.destroyRecursive();
-
-    			}
-    			dia = new dijit.Dialog({
-    				id			:	"contentletWfDialog",
-    				title		: 	"<%=LanguageUtil.get(pageContext, "Workflow-Actions")%>",
-    				style		:	"width:520px;height:400px;"
-    				});
-
-
-  				var myCp = dijit.byId("contentletWfCP");
-    			if(myCp){
-    				myCp.destroyRecursive();
-
-    			}
-    			myCp = new dojox.layout.ContentPane({
-    				id 			: "contentletWfCP",
-    				style		:	"width:500px;height:400px;margin:auto;"
-    			}).placeAt("contentletWfDialog");
-
-    			dia.show();
-    			myCp.attr("href", "/DotAjaxDirector/com.dotmarketing.portlets.workflows.ajax.WfTaskAjax?cmd=renderAction&actionId=" + actionId);
-    			return;
-			}
-			else{
+		getWorkFLow(actionId).then((action) => {
+			if ( action.actionInputs && action.actionInputs.length){
+				dispatchBulkWorkflowEvent(action);
+			} else {
 				contentAdmin.saveAssign();
 			}
-		}});
+		});
+	}
+
+	function getTaskSelectedInodes() {
+		var ids = [];
+		dojo.query(".taskCheckBox").forEach(function (node) {
+			let check = dijit.byNode(node);
+			if (check.getValue()) {
+				let inode = check.attr('data-action-inode');
+				ids.push(inode);
+			}
+		});
+		return ids;
+	}
+
+	function getWorkFLow (action) {
+		return fetch(`/api/v1/workflow/actions/${action}`)
+			.then(response => response.json())
+			.then(data => data.entity)
+			.catch(() => []);
+	}
+
+	function dispatchBulkWorkflowEvent (workflow) {
+		const data = {
+			workflow: workflow,
+			selectedInodes: getTaskSelectedInodes(),
+			callback: 'bulkWorkflowActionCallback'
+		};
+		const customEvent = document.createEvent("CustomEvent");
+		customEvent.initCustomEvent("ng-event", false, false,  {
+			name: "workflow-wizard",
+			data: data
+		});
+		document.dispatchEvent(customEvent);
+	}
+
+	function bulkWorkflowActionCallback(data) {
+		showDotCMSSystemMessage("<%=LanguageUtil.get(pageContext, "Saved")%>");
+		doFilter();
+	}
+
+	function fireActionCallback(actionId, formData){
+
+		var pushPusblishFormData = formData.pushPublish;
+		var assignComment = formData.assignComment;
+
+		//Just a sub set of the fields can be sent
+		//Any unexpected additional field on this structure will upset the rest endpoint.
+		var pushPublish = {
+			whereToSend:pushPusblishFormData.whereToSend,
+			publishDate:pushPusblishFormData.publishDate,
+			publishTime:pushPusblishFormData.publishTime,
+			expireDate:pushPusblishFormData.expireDate,
+			expireTime:pushPusblishFormData.expireTime,
+			neverExpire:pushPusblishFormData.neverExpire
+		};
+
+		let data = {
+			assignComment:assignComment,
+			pushPublish:pushPublish
+		};
+		let fireResult = fireAction(actionId, data);
+		if(fireResult){
+		  doFilter();
+		}
+		return fireResult;
+	}
+
+	function fireAction(actionId, popupData) {
+		let selectedInodes = getTaskSelectedInodes();
+		if(!selectedInodes){
+			return;
+		}
+		var assignComment = null;
+
+		if((typeof popupData != "undefined") && (typeof popupData.assignComment != "undefined")){
+			assignComment = popupData.assignComment;
+		}
+
+		var pushPublish = null;
+		if((typeof popupData != "undefined") && (typeof popupData.pushPublish != "undefined")){
+			pushPublish = popupData.pushPublish;
+		}
+
+		var additionalParams = {
+			assignComment:assignComment,
+			pushPublish:pushPublish
+		};
+
+		var data = {
+			"workflowActionId":actionId,
+			"contentletIds":selectedInodes,
+			"additionalParams":additionalParams
+		};
+
+		var dataAsJson = dojo.toJson(data);
+		var xhrArgs = {
+			url: "/api/v1/workflow/contentlet/actions/bulk/fire",
+			postData: dataAsJson,
+			handleAs: "json",
+			headers : {
+				'Accept' : 'application/json',
+				'Content-Type' : 'application/json;charset=utf-8',
+			},
+			load: function(data) {
+				if(data && data.entity){
+					console.log(data.entity);
+				} else {
+					showDotCMSSystemMessage(`<%=LanguageUtil.get(pageContext, "Available-actions-error")%>`, true);
+				}
+			},
+			error: function(error){
+				this.saveError("<%=LanguageUtil.get(pageContext, "Unable-to-excute-workflows")%>");
+			}
+		};
+
+		dojo.xhrPut(xhrArgs);
+		return true;
+
 	}
 
 	var contentAdmin = {

@@ -1,4 +1,5 @@
 package com.dotcms.contenttype.business;
+import com.dotcms.contenttype.model.field.Field;
 import com.dotcms.contenttype.model.type.ContentType;
 import com.dotcms.contenttype.model.type.ContentTypeIf;
 import com.dotmarketing.beans.Tree;
@@ -37,6 +38,15 @@ public interface RelationshipFactory {
 
     List<Relationship> byContentType(final String contentTypeInode, String orderBy);
 
+    /**
+     * Gets related content from database, given a parent/child content and a relationship object. <p>
+     * In case of a self-join relationship, the resulting list will contain a merged list where the provided
+     * content exists as a parent or as a child on that relationship
+     * @param relationship
+     * @param contentlet
+     * @return
+     * @throws DotDataException
+     */
     List<Contentlet> dbRelatedContent(final Relationship relationship, final Contentlet contentlet)
             throws DotDataException;
 
@@ -55,9 +65,27 @@ public interface RelationshipFactory {
 
     List<Tree> relatedContentTrees(final Relationship relationship, final Contentlet contentlet, final boolean hasParent) throws  DotDataException;
 
+    boolean isChildField(Relationship relationship, Field field);
+
+    /**
+     * @deprecated For relationship fields use {@link RelationshipFactory#isChildField(Relationship, Field)} instead
+     * @param relationship
+     * @param contentTypeIf
+     * @return
+     */
+    @Deprecated
     boolean isParent(final Relationship relationship, final ContentTypeIf contentTypeIf);
 
+    /**
+     * @deprecated For relationship fields use {@link RelationshipFactory#isParentField(Relationship, Field)} instead
+     * @param relationship
+     * @param contentTypeIf
+     * @return
+     */
+    @Deprecated
     boolean isChild(final Relationship relationship, final ContentTypeIf contentTypeIf);
+
+    boolean isParentField(Relationship relationship, Field field);
 
     boolean sameParentAndChild(final Relationship rel);
 

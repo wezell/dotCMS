@@ -53,24 +53,36 @@ public abstract class ContentletFactory {
 	
 	/**
 	 * This method gets a Contentlet object given the inode
-	 * @param id
+	 * @param inode
 	 * @return 
 	 * @throws DotDataException
 	 * @throws DotSecurityException 
 	 */
 	protected abstract Contentlet find(String inode) throws DotDataException, DotSecurityException;
-	
-	/**
+
+    /**
+     * Retrieves a contentlet from the database by its identifier and the working version.
+     * It includes archive content if includeDeleted is true
+     * @param identifier
+     * @param includeDeleted
+     * @return
+     * @throws DotDataException
+     * @throws DotSecurityException
+     */
+    protected abstract Contentlet findContentletByIdentifierAnyLanguage(String identifier,
+            boolean includeDeleted) throws DotDataException, DotSecurityException;
+
+    /**
 	 * Returns a live Contentlet Object for a given language
 	 * @param languageId
-	 * @param inode
+	 * @param contentletId
 	 * @return
 	 * @throws DotDataException
 	 * @throws DotSecurityException 
 	 */
 	protected abstract Contentlet findContentletForLanguage(long languageId, Identifier contentletId) throws DotDataException, DotSecurityException;
-	
-	/**
+
+    /**
 	 * Retrieves a contentlet from the database based on its identifier
 	 * @param identifier 
 	 * @param live Retrieves the live version if false retrieves the working version
@@ -108,22 +120,46 @@ public abstract class ContentletFactory {
 	protected abstract List<Contentlet> findContentlets(List<String> inodes) throws DotDataException, DotSecurityException;
 
 	/**
-	 * Returns all Contentlets for a specific structure
+	 * Returns all Contentlets for a specific structure using pagination
 	 * @param structureInode
 	 * @return
 	 * @throws DotDataException
 	 * @throws DotSecurityException
 	 */
 	protected abstract List<Contentlet> findByStructure(String structureInode, int limit, int offset) throws DotDataException, DotSecurityException;
+
+    /**
+     * Returns all Contentlets for a specific structure (whose modDate is less than or equals to maxDate) using pagination
+     * @param structureInode
+     * @param maxDate
+     * @param limit
+     * @param offset
+     * @return
+     * @throws DotDataException
+     * @throws DotStateException
+     * @throws DotSecurityException
+     */
+    protected abstract List<Contentlet> findByStructure(String structureInode, Date maxDate,
+            int limit, int offset) throws DotDataException, DotStateException, DotSecurityException;
 	
 	/**
 	 * Saves a Contentlet
-	 * @param x
+	 * @param contentlet
 	 * @return
 	 * @throws DotDataException
 	 * @throws DotSecurityException 
 	 */
 	public abstract Contentlet save(Contentlet contentlet) throws DotDataException, DotSecurityException;
+
+	/**
+	 * Saves a Contentlet
+	 * Takes a second param that states if the contentlet already exists, if set updates a specific version
+	 * @param contentlet
+	 * @param existingInode
+	 * @return
+	 * @throws DotDataException
+	 * @throws DotSecurityException
+	 */
 	protected abstract Contentlet save(Contentlet contentlet, String existingInode) throws DotDataException, DotSecurityException;
 	
 	/**
@@ -369,27 +405,6 @@ public abstract class ContentletFactory {
     
     protected abstract long indexCount(String query);
 
-	/**
-	 * This indexCount will use the thirdparty mechanism to async known when the query is returning something.
-	 * @param query          {@link String} query to test if get results
-	 * @param timeoutMillis  {@link Long}   time in millis to timeout
-	 */
-	protected abstract long indexCount(final String query,
-							  final long timeoutMillis);
-
-	/**
-	 * This indexCount will use the thirdparty mechanism to async known when the query is returning something.
-	 * this one use an async response, the indexCountSuccess will be called if the count is success, otherwise if the indexCountFailure is not null will be invoked.
-	 * @param query
-	 * @param timeoutMillis
-	 * @param indexCountSuccess
-	 * @param indexCountFailure
-	 */
-	protected abstract void indexCount(final String query,
-					final long timeoutMillis,
-					final Consumer<Long> indexCountSuccess,
-					final Consumer<Exception> indexCountFailure);
-    
     /**
      * Gets the top viewed contents identifier and numberOfViews for a particular structure for a specified date interval
      * 

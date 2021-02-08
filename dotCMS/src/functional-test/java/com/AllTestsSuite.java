@@ -1,7 +1,9 @@
 package com;
 
+import org.junit.runner.RunWith;
+import org.junit.runners.Suite;
+
 import com.dotcms.csspreproc.CSSPreProcessServletTest;
-import com.dotcms.csspreproc.LessCompilerTest;
 import com.dotcms.csspreproc.SassCompilerTest;
 import com.dotcms.publisher.ajax.RemotePublishAjaxActionTest;
 import com.dotcms.rendering.velocity.viewtools.JSONToolFTest;
@@ -13,7 +15,6 @@ import com.dotcms.rest.api.v1.sites.rules.ConditionGroupResourceFTest;
 import com.dotcms.rest.api.v1.sites.rules.RuleResourceFTest;
 import com.dotcms.rest.api.v1.system.i18n.I8NResourceFTest;
 import com.dotcms.rest.api.v1.system.ruleengine.ActionletResourceFTest;
-import com.dotmarketing.ImportUtilTest;
 import com.dotmarketing.portlets.contentlet.business.FileAssetTest;
 import com.dotmarketing.portlets.rules.RulesUnderPageAssetsFTest;
 import com.dotmarketing.portlets.rules.actionlet.SetResponseHeaderActionletFTest;
@@ -31,9 +32,6 @@ import com.dotmarketing.portlets.structure.business.URLMapTest;
 import com.dotmarketing.sitesearch.ajax.SiteSearchAjaxActionTest;
 import com.dotmarketing.webdav.WebDavTest;
 
-import org.junit.runner.RunWith;
-import org.junit.runners.Suite;
-
 /**
  * @author Jonathan Gamba.
  *         Date: 3/7/12
@@ -45,7 +43,6 @@ import org.junit.runners.Suite;
      *      e2e tests         *
      **************************/
     CSSPreProcessServletTest.class, //Needs Enterprise License
-    LessCompilerTest.class,
     SassCompilerTest.class,
     RemotePublishAjaxActionTest.class, //Needs Enterprise License
     ActionResourceFTest.class,
@@ -82,7 +79,6 @@ import org.junit.runners.Suite;
     URLMapTest.class,
     SiteSearchAjaxActionTest.class,
     WebDavTest.class,
-    ImportUtilTest.class,
     JSONToolFTest.class
 })
 public class AllTestsSuite {}

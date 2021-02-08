@@ -1266,6 +1266,9 @@ create table identifier (
    syspublish_date datetime null,
    sysexpire_date datetime null,
    full_path_lc  as CASE WHEN parent_path = 'System folder' THEN '/' ELSE LOWER(CONCAT(parent_path, asset_name)) END,
+   owner NVARCHAR(255),
+   create_date datetime,
+   asset_subtype NVARCHAR(255),
    primary key (id),
    unique (parent_path, asset_name, host_inode)
 );
@@ -1314,6 +1317,33 @@ create table workflow_task (
    language_id NUMERIC(19,0) null,
    primary key (id)
 );
+
+create table workflow_action_mappings (
+   id NVARCHAR(36) primary key,
+   action NVARCHAR(36) not null,
+   workflow_action NVARCHAR(255) not null,
+   scheme_or_content_type  NVARCHAR(255) not null
+);
+
+CREATE UNIQUE INDEX idx_workflow_action_mappings ON workflow_action_mappings (action, workflow_action, scheme_or_content_type);
+
+insert into workflow_action_mappings(id, action, workflow_action, scheme_or_content_type)
+values ('3d6be719-6b61-4ef8-a594-a9764e461597','NEW'      ,'ceca71a0-deee-4999-bd47-b01baa1bcfc8','d61a59e1-a49c-46f2-a929-db2b4bfa88b2');
+insert into workflow_action_mappings(id, action, workflow_action, scheme_or_content_type)
+values ('63865890-c863-43a1-ab61-4b495dba5eb5','EDIT'     ,'ceca71a0-deee-4999-bd47-b01baa1bcfc8','d61a59e1-a49c-46f2-a929-db2b4bfa88b2');
+insert into workflow_action_mappings(id, action, workflow_action, scheme_or_content_type)
+values ('2016a72e-85c7-4ee0-936f-36ce52df355e','PUBLISH'  ,'000ec468-0a63-4283-beb7-fcb36c107b2f','d61a59e1-a49c-46f2-a929-db2b4bfa88b2');
+insert into workflow_action_mappings(id, action, workflow_action, scheme_or_content_type)
+values ('3ec446c8-a9b6-47fe-830f-1e623493090c','UNPUBLISH','38efc763-d78f-4e4b-b092-59cd8c579b93','d61a59e1-a49c-46f2-a929-db2b4bfa88b2');
+insert into workflow_action_mappings(id, action, workflow_action, scheme_or_content_type)
+values ('e7b8c8a3-e605-473c-8680-6d95cac15c9b','ARCHIVE'  ,'4da13a42-5d59-480c-ad8f-94a3adf809fe','d61a59e1-a49c-46f2-a929-db2b4bfa88b2');
+insert into workflow_action_mappings(id, action, workflow_action, scheme_or_content_type)
+values ('99019118-df2c-4297-a5aa-2fe3fe0f52ce','UNARCHIVE','c92f9aa1-9503-4567-ac30-d3242b54d02d','d61a59e1-a49c-46f2-a929-db2b4bfa88b2');
+insert into workflow_action_mappings(id, action, workflow_action, scheme_or_content_type)
+values ('d073436e-3c10-4e4c-8c97-225e9cddf320','DELETE'   ,'777f1c6b-c877-4a37-ba4b-10627316c2cc','d61a59e1-a49c-46f2-a929-db2b4bfa88b2');
+insert into workflow_action_mappings(id, action, workflow_action, scheme_or_content_type)
+values ('3d73437e-3f1c-8e5c-ac97-a25e9cddf320','DESTROY'  ,'1e0f1c6b-b67f-4c99-983d-db2b4bfa88b2','d61a59e1-a49c-46f2-a929-db2b4bfa88b2');
+
 create table tag_inode (
    tag_id NVARCHAR(100) not null,
    inode NVARCHAR(100) not null,
@@ -1769,6 +1799,7 @@ alter table analytic_summary_visits add constraint fk9eac9733b7b46300 foreign ke
 create index idx_preference_1 on user_preferences (preference);
 create index idx_identifier_pub on identifier (syspublish_date);
 create index idx_identifier_exp on identifier (sysexpire_date);
+create index idx_identifier_asset_subtype on identifier (asset_subtype);
 create index idx_user_clickstream11 on clickstream (host_id);
 create index idx_user_clickstream12 on clickstream (last_page_id);
 create index idx_user_clickstream15 on clickstream (browser_name);
@@ -2036,21 +2067,6 @@ BEGIN
       END
   END
 fetch next from cur_Inserted into @newFolder,@newHost
-END;
-
-CREATE PROCEDURE load_records_to_index(@server_id NVARCHAR(100), @records_to_fetch INT, @priority_level INT)
-AS
-BEGIN
-WITH cte AS (
-  SELECT TOP(@records_to_fetch) *
-  FROM dist_reindex_journal WITH (ROWLOCK, READPAST, UPDLOCK)
-  WHERE serverid IS NULL
-  AND priority <= @priority_level
-  ORDER BY priority ASC)
-UPDATE cte
-  SET serverid=@server_id
-OUTPUT
-  INSERTED.*
 END;
 
 CREATE Trigger check_content_versions
@@ -2383,10 +2399,18 @@ create table workflow_action(
     scheme_id NVARCHAR(36) NOT NULL
 );
 
-CREATE TABLE workflow_action_step ( action_id NVARCHAR(36) NOT NULL, step_id NVARCHAR(36) NOT NULL, action_order INT default 0, CONSTRAINT pk_workflow_action_step PRIMARY KEY NONCLUSTERED (action_id, step_id) );
+CREATE TABLE workflow_action_step (
+    action_id    NVARCHAR(36) NOT NULL,
+    step_id      NVARCHAR(36) NOT NULL,
+    action_order INT default 0,
+    CONSTRAINT pk_workflow_action_step PRIMARY KEY NONCLUSTERED (action_id, step_id)
+);
+
+CREATE index idx_workflow_action_step_action_id on workflow_action_step(action_id);
+CREATE index idx_workflow_action_step_step_id on workflow_action_step(step_id);
 ALTER  TABLE workflow_action_step ADD CONSTRAINT fk_w_action_step_action_id foreign key (action_id) references workflow_action(id);
 ALTER  TABLE workflow_action_step ADD CONSTRAINT fk_w_action_step_step_id   foreign key (step_id)   references workflow_step  (id);
-
+CREATE index idx_workflow_action_step on workflow_action(step_id);
 
 create table workflow_action_class(
     id NVARCHAR(36) primary key,
@@ -2423,8 +2447,10 @@ delete from workflow_task;
 
 ALTER TABLE workflow_task ADD CONSTRAINT FK_workflow_task_language FOREIGN KEY (language_id) REFERENCES language(id);
 ALTER TABLE workflow_task ADD CONSTRAINT FK_workflow_assign FOREIGN KEY (assigned_to) REFERENCES cms_role (id);
-ALTER TABLE workflow_task ADD CONSTRAINT FK_workflow_task_asset FOREIGN KEY (webasset) REFERENCES identifier (id);
 ALTER TABLE workflow_task ADD CONSTRAINT FK_workflow_step FOREIGN KEY (status) REFERENCES workflow_step (id);
+ALTER TABLE workflow_task ADD CONSTRAINT unique_workflow_task unique (webasset,language_id);
+
+CREATE index idx_workflow_step_escalation_action on workflow_step(escalation_action);
 alter table workflow_step add constraint fk_escalation_action foreign key (escalation_action) references workflow_action(id);
 
 alter table contentlet_version_info add constraint FK_con_ver_lockedby foreign key (locked_by) references user_(userid);
@@ -2443,7 +2469,7 @@ alter table tag alter column user_id NVARCHAR(MAX);
 
 -- ****** Indicies Data Storage *******
 create table indicies (
-  index_name NVARCHAR(30) primary key,
+  index_name NVARCHAR(100) primary key,
   index_type NVARCHAR(16) not null unique
 );
 -- ****** Log Console Table *******
@@ -2540,7 +2566,9 @@ create table publishing_bundle(
     name NVARCHAR(255) NOT NULL,
     publish_date DATETIME,
     expire_date DATETIME,
-    owner NVARCHAR(100)
+    owner NVARCHAR(100),
+    force_push tinyint,
+    filter_key NVARCHAR(100)
 );
 
 ALTER TABLE publishing_bundle ADD CONSTRAINT FK_publishing_bundle_owner FOREIGN KEY (owner) REFERENCES user_(userid);
@@ -2568,13 +2596,11 @@ CREATE INDEX idx_pushed_assets_1 ON publishing_pushed_assets (bundle_id);
 CREATE INDEX idx_pushed_assets_2 ON publishing_pushed_assets (environment_id);
 CREATE INDEX idx_pushed_assets_3 ON publishing_pushed_assets (asset_id, environment_id);
 
-alter table publishing_bundle add force_push tinyint ;
-
 CREATE INDEX idx_pub_qa_1 ON publishing_queue_audit (status);
 
 --Cluster Tables
 
-CREATE TABLE dot_cluster(cluster_id NVARCHAR(36), PRIMARY KEY (cluster_id) );
+CREATE TABLE dot_cluster(cluster_id NVARCHAR(36), cluster_salt VARCHAR(256) ,PRIMARY KEY (cluster_id) );
 CREATE TABLE cluster_server(server_id NVARCHAR(36) NOT NULL, cluster_id NVARCHAR(36) NOT NULL, name NVARCHAR(100), ip_address NVARCHAR(39) NOT NULL, host NVARCHAR(255), cache_port SMALLINT, es_transport_tcp_port SMALLINT, es_network_port SMALLINT, es_http_port SMALLINT, key_ NVARCHAR(100), PRIMARY KEY (server_id) );
 ALTER TABLE cluster_server add constraint fk_cluster_id foreign key (cluster_id) REFERENCES dot_cluster(cluster_id);
 CREATE TABLE cluster_server_uptime(id NVARCHAR(36) NOT NULL, server_id NVARCHAR(36) NOT NULL, startup datetime null, heartbeat datetime null, PRIMARY KEY (id) );
@@ -2607,22 +2633,16 @@ alter table container_structures add constraint FK_cs_inode foreign key (contain
 
 
 -- license repo
-create table sitelic(id NVARCHAR(36) primary key, serverid NVARCHAR(100), license NVARCHAR(MAX) not null, lastping datetime not null);
+create table sitelic(id NVARCHAR(36) primary key, serverid NVARCHAR(100), license NVARCHAR(MAX) not null, lastping datetime not null, startup_time bigint);
 
 -- Integrity Checker
-create table folders_ir(folder NVARCHAR(255), local_inode NVARCHAR(36), remote_inode NVARCHAR(36), local_identifier NVARCHAR(36), remote_identifier NVARCHAR(36), endpoint_id NVARCHAR(36), PRIMARY KEY (local_inode, endpoint_id));
-create table structures_ir(velocity_name NVARCHAR(255), local_inode NVARCHAR(36), remote_inode NVARCHAR(36), endpoint_id NVARCHAR(36), PRIMARY KEY (local_inode, endpoint_id));
-create table schemes_ir(name NVARCHAR(255), local_inode NVARCHAR(36), remote_inode NVARCHAR(36), endpoint_id NVARCHAR(36), PRIMARY KEY (local_inode, endpoint_id));
-create table htmlpages_ir(html_page NVARCHAR(255), local_working_inode NVARCHAR(36), local_live_inode NVARCHAR(36), remote_working_inode NVARCHAR(36), remote_live_inode NVARCHAR(36),local_identifier NVARCHAR(36), remote_identifier NVARCHAR(36), endpoint_id NVARCHAR(36), language_id bigint, PRIMARY KEY (local_working_inode, language_id, endpoint_id));
-create table fileassets_ir(file_name NVARCHAR(255), local_working_inode NVARCHAR(36), local_live_inode NVARCHAR(36), remote_working_inode NVARCHAR(36), remote_live_inode NVARCHAR(36),local_identifier NVARCHAR(36), remote_identifier NVARCHAR(36), endpoint_id NVARCHAR(36), language_id bigint, PRIMARY KEY (local_working_inode, language_id, endpoint_id));
-create table cms_roles_ir(name NVARCHAR(1000), role_key NVARCHAR(255), local_role_id NVARCHAR(36), remote_role_id NVARCHAR(36), local_role_fqn NVARCHAR(1000), remote_role_fqn NVARCHAR(1000), endpoint_id NVARCHAR(36), PRIMARY KEY (local_role_id, endpoint_id));
+create table folders_ir(folder NVARCHAR(255), local_inode NVARCHAR(36), remote_inode NVARCHAR(36), local_identifier NVARCHAR(36), remote_identifier NVARCHAR(36), endpoint_id NVARCHAR(40), PRIMARY KEY (local_inode, endpoint_id));
+create table structures_ir(velocity_name NVARCHAR(255), local_inode NVARCHAR(36), remote_inode NVARCHAR(36), endpoint_id NVARCHAR(40), PRIMARY KEY (local_inode, endpoint_id));
+create table schemes_ir(name NVARCHAR(255), local_inode NVARCHAR(36), remote_inode NVARCHAR(36), endpoint_id NVARCHAR(40), PRIMARY KEY (local_inode, endpoint_id));
+create table htmlpages_ir(html_page NVARCHAR(255), local_working_inode NVARCHAR(36), local_live_inode NVARCHAR(36), remote_working_inode NVARCHAR(36), remote_live_inode NVARCHAR(36),local_identifier NVARCHAR(36), remote_identifier NVARCHAR(36), endpoint_id NVARCHAR(40), language_id bigint, PRIMARY KEY (local_working_inode, language_id, endpoint_id));
+create table fileassets_ir(file_name NVARCHAR(255), local_working_inode NVARCHAR(36), local_live_inode NVARCHAR(36), remote_working_inode NVARCHAR(36), remote_live_inode NVARCHAR(36),local_identifier NVARCHAR(36), remote_identifier NVARCHAR(36), endpoint_id NVARCHAR(40), language_id bigint, PRIMARY KEY (local_working_inode, language_id, endpoint_id));
+create table cms_roles_ir(name NVARCHAR(1000), role_key NVARCHAR(255), local_role_id NVARCHAR(36), remote_role_id NVARCHAR(36), local_role_fqn NVARCHAR(1000), remote_role_fqn NVARCHAR(1000), endpoint_id NVARCHAR(40), PRIMARY KEY (local_role_id, endpoint_id));
 
-alter table folders_ir add constraint FK_folder_ir_ep foreign key (endpoint_id) references publishing_end_point(id);
-alter table structures_ir add constraint FK_structure_ir_ep foreign key (endpoint_id) references publishing_end_point(id);
-alter table schemes_ir add constraint FK_scheme_ir_ep foreign key (endpoint_id) references publishing_end_point(id);
-alter table htmlpages_ir add constraint FK_page_ir_ep foreign key (endpoint_id) references publishing_end_point(id);
-alter table fileassets_ir add constraint FK_file_ir_ep foreign key (endpoint_id) references publishing_end_point(id);
-alter table cms_roles_ir add constraint FK_cms_roles_ir_ep foreign key (endpoint_id) references publishing_end_point(id);
 
 ---Server Action
 create table cluster_server_action(
@@ -2676,3 +2696,37 @@ CREATE TABLE api_token_issued(
 create index idx_api_token_issued_user ON api_token_issued (token_userid);
 
 CREATE UNIQUE INDEX idx_ident_uniq_asset_name on identifier (full_path_lc,host_inode);
+
+create table storage_group (
+    group_name varchar(255)  not null,
+    mod_date   datetime NOT NULL DEFAULT GETDATE(),
+    PRIMARY KEY (group_name)
+);
+
+create table storage (
+    path       varchar(255) not null,
+    group_name varchar(255) not null,
+    hash       varchar(64) not null,
+    metadata   text not null,
+    mod_date   datetime  NOT NULL DEFAULT GETDATE(),
+    PRIMARY KEY (path, group_name),
+    FOREIGN KEY (group_name) REFERENCES storage_group (group_name)
+);
+
+CREATE INDEX idx_storage_hash ON storage (hash);
+
+create table storage_data (
+    hash_id  varchar(64) not null,
+    data     varbinary(max) not null,
+    mod_date datetime NOT NULL DEFAULT GETDATE(),
+    PRIMARY KEY (hash_id)
+);
+
+create table storage_x_data (
+    storage_hash varchar(64)                 not null,
+    data_hash    varchar(64)                 not null,
+    data_order   integer                     not null,
+    mod_date     datetime NOT NULL DEFAULT GETDATE(),
+    PRIMARY KEY (storage_hash, data_hash),
+    FOREIGN KEY (data_hash) REFERENCES storage_data (hash_id)
+);

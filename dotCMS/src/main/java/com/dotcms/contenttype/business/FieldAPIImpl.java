@@ -1,5 +1,6 @@
 package com.dotcms.contenttype.business;
 
+import static com.dotcms.contenttype.model.type.PageContentType.PAGE_FRIENDLY_NAME_FIELD_VAR;
 import static com.dotcms.util.CollectionsUtils.list;
 
 import com.dotcms.api.system.event.message.MessageSeverity;
@@ -8,7 +9,8 @@ import com.dotcms.api.system.event.message.SystemMessageEventUtil;
 import com.dotcms.api.system.event.message.builder.SystemMessageBuilder;
 import com.dotcms.business.CloseDBIfOpened;
 import com.dotcms.business.WrapInTransaction;
-import com.dotcms.content.business.DotMappingException;
+import com.dotcms.content.elasticsearch.business.IndiciesInfo;
+import com.dotcms.content.elasticsearch.util.ESMappingUtilHelper;
 import com.dotcms.contenttype.exception.NotFoundInDbException;
 import com.dotcms.contenttype.model.field.BinaryField;
 import com.dotcms.contenttype.model.field.CategoryField;
@@ -41,11 +43,16 @@ import com.dotcms.contenttype.model.field.WysiwygField;
 import com.dotcms.contenttype.model.field.event.FieldDeletedEvent;
 import com.dotcms.contenttype.model.field.event.FieldSavedEvent;
 import com.dotcms.contenttype.model.type.ContentType;
+import com.dotcms.contenttype.transform.contenttype.ContentTypeInternationalization;
 import com.dotcms.contenttype.transform.contenttype.StructureTransformer;
-import com.dotcms.contenttype.transform.field.LegacyFieldTransformer;
+import com.dotcms.exception.ExceptionUtil;
+import com.dotcms.languagevariable.business.LanguageVariableAPI;
 import com.dotcms.rendering.velocity.services.ContentTypeLoader;
 import com.dotcms.rendering.velocity.services.ContentletLoader;
 import com.dotcms.repackage.com.google.common.annotations.VisibleForTesting;
+import com.dotmarketing.quartz.job.CleanUpFieldReferencesJob;
+import com.dotmarketing.util.json.JSONException;
+import com.dotmarketing.util.json.JSONObject;
 import com.google.common.collect.ImmutableList;
 import com.dotcms.system.event.local.business.LocalSystemEventsAPI;
 import com.dotmarketing.business.APILocator;
@@ -67,14 +74,15 @@ import com.dotmarketing.util.ActivityLogger;
 import com.dotmarketing.util.Logger;
 import com.dotmarketing.util.UtilMethods;
 import com.dotmarketing.util.WebKeys.Relationship.RELATIONSHIP_CARDINALITY;
+import com.google.common.collect.ImmutableMap;
 import com.liferay.portal.language.LanguageException;
 import com.liferay.portal.language.LanguageUtil;
 import com.liferay.portal.model.User;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
-import java.util.Optional;
+import java.io.IOException;
+import java.net.ConnectException;
+import java.util.*;
+
 import org.apache.commons.lang.StringUtils;
 
 
@@ -93,6 +101,7 @@ public class FieldAPIImpl implements FieldAPI {
   private final UserAPI userAPI;
   private final RelationshipAPI relationshipAPI;
   private final LocalSystemEventsAPI localSystemEventsAPI;
+  private final LanguageVariableAPI languageVariableAPI;
 
   private final FieldFactory fieldFactory = new FieldFactoryImpl();
 
@@ -101,25 +110,35 @@ public class FieldAPIImpl implements FieldAPI {
           APILocator.getContentletAPI(),
           APILocator.getUserAPI(),
           APILocator.getRelationshipAPI(),
-          APILocator.getLocalSystemEventsAPI());
+          APILocator.getLocalSystemEventsAPI(),
+          APILocator.getLanguageVariableAPI());
   }
 
   @VisibleForTesting
   public FieldAPIImpl(final PermissionAPI perAPI,
-                        final ContentletAPI conAPI,
-                        final UserAPI userAPI,
-                        final RelationshipAPI relationshipAPI,
-                        final LocalSystemEventsAPI localSystemEventsAPI) {
+                      final ContentletAPI conAPI,
+                      final UserAPI userAPI,
+                      final RelationshipAPI relationshipAPI,
+                      final LocalSystemEventsAPI localSystemEventsAPI,
+                      final LanguageVariableAPI languageVariableAPI) {
       this.permissionAPI   = perAPI;
       this.contentletAPI   = conAPI;
       this.userAPI         = userAPI;
       this.relationshipAPI = relationshipAPI;
       this.localSystemEventsAPI = localSystemEventsAPI;
+      this.languageVariableAPI = languageVariableAPI;
   }
 
   @WrapInTransaction
   @Override
   public Field save(final Field field, final User user) throws DotDataException, DotSecurityException {
+        return save(field, user, true);
+  }
+
+  @WrapInTransaction
+  @Override
+  public Field save(final Field field, final User user, final boolean reorder)
+          throws DotDataException, DotSecurityException {
 
       if(!UtilMethods.isSet(field.contentTypeId())){
           Logger.error(this, "ContentTypeId needs to be set to save the Field");
@@ -131,12 +150,27 @@ public class FieldAPIImpl implements FieldAPI {
 		permissionAPI.checkPermission(type, PermissionLevel.EDIT_PERMISSIONS, user);
 
 	    Field oldField = null;
+	    boolean useFriendlyNameOldVarName = false;
 	    if (UtilMethods.isSet(field.id())) {
 	    	try {
 	    		oldField = fieldFactory.byId(field.id());
-
+	        final Field newFieldCopy = FieldBuilder.builder(field).modDate(oldField.modDate()).build();
+	        if(newFieldCopy.equals(oldField)) {
+	          Logger.info(this, "No changes made to field: " + field.variable() + ", returning");
+	          return field;
+	        }
                 if(!oldField.variable().equals(field.variable())){
-                    throw new DotDataValidationException("Field variable can not be modified, please use the following: " + oldField.variable());
+
+                    //TODO: Remove this condition for future releases.
+                    // It has been done to keep backward compatibility -> Issue: https://github.com/dotCMS/core/issues/17239
+                    if (oldField.variable().equalsIgnoreCase(field.variable()) && oldField
+                            .variable().equals(PAGE_FRIENDLY_NAME_FIELD_VAR)) {
+                        useFriendlyNameOldVarName = true;
+                    } else {
+                        throw new DotDataValidationException(
+                                "Field variable can not be modified, please use the following: "
+                                        + oldField.variable());
+                    }
                 }
 
                 if(!oldField.contentTypeId().equals(field.contentTypeId()) ){
@@ -144,7 +178,7 @@ public class FieldAPIImpl implements FieldAPI {
                       + "please use the following: " + oldField.contentTypeId());
                 }
 
-                if (oldField.sortOrder() != field.sortOrder()){
+                if (reorder && oldField.sortOrder() != field.sortOrder()){
 	    		    if (oldField.sortOrder() > field.sortOrder()) {
                         fieldFactory.moveSortOrderForward(type.id(), field.sortOrder(), oldField.sortOrder());
                     } else {
@@ -171,17 +205,24 @@ public class FieldAPIImpl implements FieldAPI {
                 Logger.error(this, errorMessage);
                 throw new DotDataValidationException(errorMessage);
             }
-            fieldFactory.moveSortOrderForward(type.id(), field.sortOrder());
+
+            if (reorder) {
+                fieldFactory.moveSortOrderForward(type.id(), field.sortOrder());
+            }
         }
 
-        if (field instanceof RelationshipField) {
+        if (field instanceof RelationshipField && !(((RelationshipField)field).skipRelationshipCreation())) {
 	        validateRelationshipField(field);
         }
 
-        Field result = fieldFactory.save(field);
+      //TODO: Remove this condition for future releases.
+      // It has been done to keep backward compatibility -> Issue: https://github.com/dotCMS/core/issues/17239
+      Field result = fieldFactory
+              .save(useFriendlyNameOldVarName ? FieldBuilder.builder(field).variable(oldField.variable())
+                      .build() : field);
 
         //if RelationshipField, Relationship record must be added/updated
-        if (field instanceof RelationshipField) {
+        if (field instanceof RelationshipField && !(((RelationshipField)field).skipRelationshipCreation())) {
             Optional<Relationship> relationship = getRelationshipForField(result, contentTypeAPI,
                   type, user);
 
@@ -216,6 +257,10 @@ public class FieldAPIImpl implements FieldAPI {
                   String.format("User %s/%s modified field %s to %s Structure.", user.getUserId(), user.getFirstName(),
                           field.name(), structure.getName()));
       } else {
+          //If saving a new indexed field, it should try to set an ES mapping for the field
+          if (result.indexed()) {
+              addESMappingForField(structure, result);
+          }
           ActivityLogger.logInfo(ActivityLogger.class, "Save Field Action",
                   String.format("User %s/%s added field %s to %s Structure.", user.getUserId(), user.getFirstName(), field.name(),
                           structure.getName()));
@@ -228,6 +273,39 @@ public class FieldAPIImpl implements FieldAPI {
 
       return result;
   }
+
+    /**
+     * This method tries to set an ES mapping for the field.
+     * In case of failure, we just log a warning and continue with the transaction
+     * @param field
+     */
+    private void addESMappingForField(final Structure structure, final Field field) {
+        try {
+            final IndiciesInfo indiciesInfo = APILocator.getIndiciesAPI().loadIndicies();
+            if (indiciesInfo != null){
+                if (UtilMethods.isSet(indiciesInfo.getLive())) {
+                    ESMappingUtilHelper.getInstance().addCustomMapping(field, indiciesInfo.getLive());
+                    Logger.info(this.getClass(), String.format(
+                            "Elasticsearch mapping set for Field: %s. Content type: %s on Index: %s",
+                            field.name(), structure.getName(), APILocator.getESIndexAPI()
+                                    .removeClusterIdFromName(indiciesInfo.getLive())));
+                }
+
+                if (UtilMethods.isSet(indiciesInfo.getWorking())) {
+                    ESMappingUtilHelper.getInstance().addCustomMapping(field, indiciesInfo.getWorking());
+                    Logger.info(this.getClass(), String.format(
+                            "Elasticsearch mapping set for Field: %s. Content type: %s on Index: %s",
+                            field.name(), structure.getName(), APILocator.getESIndexAPI()
+                                    .removeClusterIdFromName(indiciesInfo.getWorking())));
+                }
+            }
+
+        } catch (Exception e) {
+            Logger.warnAndDebug(this.getClass(), String.format(
+                    "Error trying to set Elasticsearch mapping for Field: %s. Content type: %s",
+                    field.name(), structure.getName()), e);
+        }
+    }
 
     /**
      * Validates that properties n a relationship field are set correctly
@@ -452,11 +530,63 @@ public class FieldAPIImpl implements FieldAPI {
       
       //update Content Type mod_date to detect the changes done on the field variables
       contentTypeAPI.updateModDate(type);
+
+      //Validates custom mapping format
+      if (var.key().equals(FieldVariable.ES_CUSTOM_MAPPING_KEY)){
+          try {
+              new JSONObject(var.value());
+          } catch (JSONException e) {
+              handleInvalidCustomMappingError(var, user, field, type, e);
+          }
+
+          //Verifies the field is marked as System Indexed. In case it isn't, the field will be updated with this flag on
+          if (!field.indexed()) {
+              save(FieldBuilder.builder(field).indexed(true).build(), user);
+              Logger.info(this, "Field " + type.variable() + "." + field.variable()
+                      + " has been marked as System Indexed as it has defined a field variable with key "
+                      + FieldVariable.ES_CUSTOM_MAPPING_KEY);
+          }
+      }
       
       return newFieldVariable;
   }
 
-  @Override
+    /**
+     * Sends a system message (warning) when a custom mapping is invalid
+     * @param fieldVariable
+     * @param user
+     * @param field
+     * @param type
+     * @param exception
+     */
+    private void handleInvalidCustomMappingError(final FieldVariable fieldVariable, final User user,
+            final Field field, final ContentType type, final JSONException exception) {
+        final String message;
+        try {
+            message = "Invalid format on field variable value. Value should be a JSON object. Field variable: "
+                    + fieldVariable.key() + ". Field: " + field.name() + ". Content Type: " + type
+                    .name();
+
+            final SystemMessageEventUtil systemMessageEventUtil = SystemMessageEventUtil.getInstance();
+
+            systemMessageEventUtil.pushMessage(
+                    new SystemMessageBuilder()
+                            .setMessage(LanguageUtil.get(
+                                    user.getLocale(),
+                                    "message.fieldvariables.invalid.custom.mapping"))
+                            .setSeverity(MessageSeverity.WARNING)
+                            .setType(MessageType.SIMPLE_MESSAGE)
+                            .setLife(6000)
+                            .create(),
+                    list(user.getUserId())
+            );
+            Logger.warnAndDebug(FieldAPIImpl.class, message, exception);
+        } catch (LanguageException ex) {
+            throw new DotRuntimeException(ex);
+        }
+    }
+
+    @Override
   public void delete(final Field field) throws DotDataException {
 	  try {
 		  this.delete(field, this.userAPI.getSystemUser());
@@ -480,24 +610,9 @@ public class FieldAPIImpl implements FieldAPI {
       }
 
       final Structure structure = new StructureTransformer(type).asStructure();
-      com.dotmarketing.portlets.structure.model.Field legacyField = new LegacyFieldTransformer(field).asOldField();
-
-
-      if (!(field instanceof CategoryField) &&
-          !(field instanceof ConstantField) &&
-          !(field instanceof HiddenField) &&
-          !(field instanceof LineDividerField) &&
-          !(field instanceof TabDividerField) &&
-          !(field instanceof RelationshipsTabField) &&
-          !(field instanceof RelationshipField) &&
-          !(field instanceof PermissionTabField) &&
-          !(field instanceof HostFolderField) &&
-          structure != null
-      ) {
-          this.contentletAPI.cleanField(structure, legacyField, this.userAPI.getSystemUser(), false);
-      }
 
       fieldFactory.moveSortOrderBackward(type.id(), oldField.sortOrder());
+
       fieldFactory.delete(field);
 
       ActivityLogger.logInfo(ActivityLogger.class, "Delete Field Action",
@@ -509,16 +624,6 @@ public class FieldAPIImpl implements FieldAPI {
 
       CacheLocator.getContentTypeCache().remove(structure);
 
-
-      //Refreshing permissions
-      if (field instanceof HostFolderField) {
-          try {
-              this.contentletAPI.cleanHostField(structure, this.userAPI.getSystemUser(), false);
-          } catch(DotMappingException e) {}
-
-          this.permissionAPI.resetChildrenPermissionReferences(structure);
-      }
-
       //if RelationshipField, Relationship record must be updated/deleted
       if (field instanceof RelationshipField) {
           removeRelationshipLink(field, type, contentTypeAPI);
@@ -528,14 +633,11 @@ public class FieldAPIImpl implements FieldAPI {
       if(field.indexed()){
           contentletAPI.reindex(structure);
       }
-      // remove the file from the cache
-      new ContentletLoader().invalidate(structure);
 
-      HibernateUtil.addCommitListener(()-> {
-          localSystemEventsAPI.notify(new FieldDeletedEvent(field.variable()));
-      });
+      CleanUpFieldReferencesJob.triggerCleanUpJob(field, user);
+      localSystemEventsAPI.notify(new FieldDeletedEvent(field.variable()));
+
   }
-
 
     /**
      * Remove one-sided relationship when the field is deleted
@@ -607,7 +709,7 @@ public class FieldAPIImpl implements FieldAPI {
     }
 
 
-    @CloseDBIfOpened
+  @CloseDBIfOpened
   @Override
   public List<Field> byContentTypeId(final String typeId) throws DotDataException {
     return fieldFactory.byContentTypeId(typeId);
@@ -727,10 +829,55 @@ public class FieldAPIImpl implements FieldAPI {
   @WrapInTransaction
   public void saveFields(final List<Field> fields, final User user) throws DotSecurityException, DotDataException {
     for (final Field field : fields) {
-        save(field, user);
+        save(field, user, false);
     }
   }
 
-  
+    @Override
+    public Map<String, Object> getFieldInternationalization(
+            final ContentType contentType,
+            final ContentTypeInternationalization contentTypeInternationalization,
+            final Map<String, Object> fieldMap
+    )  {
+        return getFieldInternationalization(contentType, contentTypeInternationalization, fieldMap, APILocator.systemUser());
+    }
+
+    @Override
+    public Map<String, Object> getFieldInternationalization(
+            final ContentType contentType,
+            final ContentTypeInternationalization contentTypeInternationalization,
+            final Map<String, Object> fieldMap,
+            final User user
+    )  {
+
+        final long languageId = contentTypeInternationalization.getLanguageId();
+        final boolean live = contentTypeInternationalization.isLive();
+
+        try {
+            final ImmutableMap.Builder<String, Object> builder = new ImmutableMap.Builder<>();
+
+            for (final String propertyName : fieldMap.keySet()) {
+                final String key = String.format("%s.%s.%s", contentType.variable(), fieldMap.get("variable"), propertyName);
+                final String i18nValue = this.languageVariableAPI.getLanguageVariable(
+                        key, languageId, user, live, user == null);
+
+                if (!i18nValue.equals(key) && !i18nValue.equals(fieldMap.get(propertyName).toString())) {
+                    builder.put(propertyName, i18nValue);
+                } else {
+                    builder.put(propertyName, fieldMap.get(propertyName));
+                }
+            }
+
+            return builder.build();
+        } catch (DotRuntimeException e) {
+            if (ExceptionUtil.causedBy(e, ConnectException.class)) {
+               return  new ImmutableMap.Builder<String, Object>().putAll(fieldMap).build();
+            } else {
+                throw e;
+            }
+        }
+
+
+    }
   
 }

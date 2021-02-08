@@ -88,6 +88,11 @@ public class TagAPITest extends IntegrationTestBase {
 	@Test
 	public void getAllTags () throws Exception {
 
+		// let's create some tags
+		for(int i=0; i<5; i++) {
+			saveTag("tagByName" + i + System.currentTimeMillis());
+		}
+
 		List<Tag> tags = tagAPI.getAllTags();
 		assertNotNull( tags );
 		assertFalse( tags.isEmpty() );
@@ -135,7 +140,7 @@ public class TagAPITest extends IntegrationTestBase {
 
 		String tagName = "testapi"+UtilMethods.dateToHTMLDate(new Date(),"MMddyyyyHHmmss");
 		Tag createdTag = tagAPI.saveTag(tagName, testUser.getUserId(), defaultHostId, false);
-		tagAPI.addUserTagInode(createdTag, APILocator.getUserProxyAPI().getUserProxy(testUser.getUserId(), APILocator.getUserAPI().getSystemUser(), false).getInode());
+		tagAPI.addUserTagInode(createdTag, testUser.getUserId());
 
 		tags = tagAPI.getTagsForUserByUserId(testUser.getUserId());
 		assertNotNull(tags);
@@ -149,11 +154,11 @@ public class TagAPITest extends IntegrationTestBase {
 	 */
 	@Test
 	public void getTagsForUserByUserInode() throws Exception{
-		UserProxy userProxy = APILocator.getUserProxyAPI().getUserProxy(testUser.getUserId(),systemUser, false);
-		String tagName = "testapi2" + UtilMethods.dateToHTMLDate(new Date(), "MMddyyyyHHmmss");
-		tagAPI.addUserTag(tagName, testUser.getUserId(), userProxy.getInode());
 
-		List<Tag> tags =  tagAPI.getTagsForUserByUserInode(userProxy.getInode());    
+		String tagName = "testapi2" + UtilMethods.dateToHTMLDate(new Date(), "MMddyyyyHHmmss");
+		tagAPI.addUserTag(tagName, testUser.getUserId(), testUser.getUserId());
+
+		List<Tag> tags =  tagAPI.getTagsForUserByUserInode(testUser.getUserId());    
 		assertTrue(tags.size() > 1);
 		boolean hasUserInodeTags=false;
 		for(Tag tag : tags){
@@ -247,9 +252,9 @@ public class TagAPITest extends IntegrationTestBase {
 	 */
 	@Test
 	public void addTag() throws Exception {
-		UserProxy userProxy = APILocator.getUserProxyAPI().getUserProxy(testUser.getUserId(),systemUser, false);
+		
 		String tagName = "testapi6" + UtilMethods.dateToHTMLDate(new Date(), "MMddyyyyHHmmss");
-		tagAPI.addUserTag(tagName, testUser.getUserId(), userProxy.getInode());
+		tagAPI.addUserTag(tagName, testUser.getUserId(), testUser.getUserId());
 
 		Tag tag = tagAPI.getTagByNameAndHost(tagName, hostAPI.findSystemHost().getIdentifier());
 		assertNotNull(tag);
@@ -360,8 +365,7 @@ public class TagAPITest extends IntegrationTestBase {
 		TagInode tInode2 = tagAPI.getTagInode(tag2.getTagId(), tagInode2.getInode(),WIKI_TAG_VARNAME);
 		assertTrue(UtilMethods.isSet(tInode2.getInode()) && tInode2.getInode().equals(tagInode2.getInode()) && tInode2.getTagId().equals(tag2.getTagId()));
 
-		conAPI.archive(contentAsset,testUser,false);
-		conAPI.delete(contentAsset,testUser,false	);
+		conAPI.destroy(contentAsset, testUser, false);
 	}
 
 	/**
@@ -401,8 +405,7 @@ public class TagAPITest extends IntegrationTestBase {
 		}
 		assertTrue(existTagInode);
 
-		conAPI.archive(contentAsset,testUser,false);
-		conAPI.delete(contentAsset,testUser,false	);
+		conAPI.destroy(contentAsset, testUser, false);
 	}
 
 	/**
@@ -441,9 +444,7 @@ public class TagAPITest extends IntegrationTestBase {
 		}
 		assertTrue(existTagInode);
 
-
-		conAPI.archive(contentAsset,testUser,false);
-		conAPI.delete(contentAsset,testUser,false	);
+		conAPI.destroy(contentAsset, testUser, false);
 	}
 
 	/**
@@ -480,9 +481,7 @@ public class TagAPITest extends IntegrationTestBase {
 		assertTrue(tagInode.getTagId().equals(tagInode2.getTagId()));
 		assertTrue(tagInode.getInode().equals(tagInode2.getInode()));
 
-
-		conAPI.archive(contentAsset,testUser,false);
-		conAPI.delete(contentAsset,testUser,false	);
+		conAPI.destroy(contentAsset, testUser, false);
 	}
 
 	/**
@@ -538,9 +537,7 @@ public class TagAPITest extends IntegrationTestBase {
 		tag3 = tagAPI.getTagByTagId(tag3.getTagId());
 		assertNotNull(tag3);
 
-
-		conAPI.archive(contentAsset,testUser,false);
-		conAPI.delete(contentAsset,testUser,false	);
+		conAPI.destroy(contentAsset, testUser, false);
 	}
 
 	/**
@@ -579,8 +576,7 @@ public class TagAPITest extends IntegrationTestBase {
 		assertNull(tag);
 
 
-		conAPI.archive(contentAsset,testUser,false);
-		conAPI.delete(contentAsset,testUser,false	);
+		conAPI.destroy(contentAsset, testUser, false);
 	}
 
 	/**
@@ -733,9 +729,7 @@ public class TagAPITest extends IntegrationTestBase {
 		assertTrue(tags.contains(tag));
 		assertTrue(tags.contains(tag2));
 
-
-		conAPI.archive(contentAsset,testUser,false);
-		conAPI.delete(contentAsset,testUser,false	);
+		conAPI.destroy(contentAsset, testUser, false);
 	}
 
 	/**
@@ -813,9 +807,7 @@ public class TagAPITest extends IntegrationTestBase {
 		assertFalse(tag.isPersona());
 		assertTrue(tag.getTagName().equals(othertags));
 
-
-		conAPI.archive(persona,testUser,false);
-		conAPI.delete(persona,testUser,false	);
+		conAPI.destroy(persona, testUser, false);
 	}
 
 	/**
@@ -927,10 +919,8 @@ public class TagAPITest extends IntegrationTestBase {
 		cachedTags = tagCache.getByHost(defaultHostId);
 		assertNotNull( cachedTags );
 		assertEquals( cachedTags, foundTags );
-
-
-		conAPI.archive(contentAsset,testUser,false);
-		conAPI.delete(contentAsset,testUser,false	);
+   
+		conAPI.destroy(contentAsset, testUser, false);
 	}
 
 	private Tag saveTag (final String tagName) throws DotDataException {

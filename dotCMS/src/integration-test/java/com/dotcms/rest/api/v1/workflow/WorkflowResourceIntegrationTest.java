@@ -7,10 +7,6 @@ import static com.dotcms.rest.api.v1.workflow.WorkflowTestUtil.CURRENT_STEP;
 import static com.dotcms.rest.api.v1.workflow.WorkflowTestUtil.DM_WORKFLOW;
 import static com.dotcms.rest.api.v1.workflow.WorkflowTestUtil.PUBLISH;
 import static com.dotcms.rest.api.v1.workflow.WorkflowTestUtil.SAVE;
-import static com.dotcms.rest.api.v1.workflow.WorkflowTestUtil.SAVE_AS_DRAFT;
-import static com.dotcms.rest.api.v1.workflow.WorkflowTestUtil.SAVE_PUBLISH;
-import static com.dotcms.rest.api.v1.workflow.WorkflowTestUtil.SEND_FOR_REVIEW;
-import static com.dotcms.rest.api.v1.workflow.WorkflowTestUtil.SEND_TO_LEGAL;
 import static com.dotcms.rest.api.v1.workflow.WorkflowTestUtil.SYSTEM_WORKFLOW;
 import static com.dotcms.rest.api.v1.workflow.WorkflowTestUtil.actionName;
 import static com.dotcms.rest.api.v1.workflow.WorkflowTestUtil.addSteps;
@@ -22,7 +18,6 @@ import static com.dotcms.rest.api.v1.workflow.WorkflowTestUtil.findSchemes;
 import static com.dotcms.rest.api.v1.workflow.WorkflowTestUtil.findSteps;
 import static com.dotcms.rest.api.v1.workflow.WorkflowTestUtil.getAllWorkflowActions;
 import static com.dotcms.rest.api.v1.workflow.WorkflowTestUtil.schemeName;
-import static com.dotmarketing.business.Role.ADMINISTRATOR;
 import static com.dotmarketing.portlets.workflows.util.WorkflowImportExportUtil.ACTION_ID;
 import static com.dotmarketing.portlets.workflows.util.WorkflowImportExportUtil.ACTION_ORDER;
 import static com.dotmarketing.portlets.workflows.util.WorkflowImportExportUtil.STEP_ID;
@@ -39,7 +34,6 @@ import static org.mockito.Matchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import com.dotcms.business.WrapInTransaction;
 import com.dotcms.contenttype.business.ContentTypeAPI;
 import com.dotcms.contenttype.business.FieldAPI;
 import com.dotcms.contenttype.model.field.CategoryField;
@@ -56,6 +50,7 @@ import com.dotcms.contenttype.model.field.ImmutableTextField;
 import com.dotcms.contenttype.model.field.KeyValueField;
 import com.dotcms.contenttype.model.field.MultiSelectField;
 import com.dotcms.contenttype.model.field.RadioField;
+import com.dotcms.contenttype.model.field.RelationshipField;
 import com.dotcms.contenttype.model.field.SelectField;
 import com.dotcms.contenttype.model.field.TextAreaField;
 import com.dotcms.contenttype.model.field.TextField;
@@ -63,11 +58,16 @@ import com.dotcms.contenttype.model.field.TimeField;
 import com.dotcms.contenttype.model.field.WysiwygField;
 import com.dotcms.contenttype.model.type.BaseContentType;
 import com.dotcms.contenttype.model.type.ContentType;
+import com.dotcms.datagen.CategoryDataGen;
 import com.dotcms.datagen.RoleDataGen;
 import com.dotcms.datagen.TestDataUtils;
 import com.dotcms.datagen.TestUserUtils;
 import com.dotcms.datagen.TestWorkflowUtils;
 import com.dotcms.datagen.WorkflowDataGen;
+import com.dotcms.mock.request.MockAttributeRequest;
+import com.dotcms.mock.request.MockHeaderRequest;
+import com.dotcms.mock.request.MockHttpRequest;
+import com.dotcms.mock.request.MockSessionRequest;
 import com.dotcms.mock.response.MockAsyncResponse;
 import com.dotcms.rest.ContentHelper;
 import com.dotcms.rest.EmptyHttpResponse;
@@ -93,7 +93,9 @@ import com.dotmarketing.business.APILocator;
 import com.dotmarketing.business.PermissionAPI;
 import com.dotmarketing.business.Role;
 import com.dotmarketing.business.RoleAPI;
+import com.dotmarketing.common.reindex.ReindexThread;
 import com.dotmarketing.exception.DotDataException;
+import com.dotmarketing.portlets.categories.model.Category;
 import com.dotmarketing.portlets.contentlet.business.ContentletAPI;
 import com.dotmarketing.portlets.contentlet.business.HostAPI;
 import com.dotmarketing.portlets.contentlet.model.Contentlet;
@@ -101,6 +103,7 @@ import com.dotmarketing.portlets.contentlet.model.IndexPolicy;
 import com.dotmarketing.portlets.languagesmanager.business.LanguageAPI;
 import com.dotmarketing.portlets.workflows.business.BaseWorkflowIntegrationTest;
 import com.dotmarketing.portlets.workflows.business.WorkflowAPI;
+import com.dotmarketing.portlets.workflows.business.WorkflowAPI.SystemAction;
 import com.dotmarketing.portlets.workflows.model.WorkflowAction;
 import com.dotmarketing.portlets.workflows.model.WorkflowScheme;
 import com.dotmarketing.portlets.workflows.model.WorkflowState;
@@ -110,10 +113,9 @@ import com.dotmarketing.util.DateUtil;
 import com.dotmarketing.util.Logger;
 import com.dotmarketing.util.UUIDGenerator;
 import com.dotmarketing.util.UtilMethods;
+import com.dotmarketing.util.WebKeys.Relationship.RELATIONSHIP_CARDINALITY;
 import com.google.common.collect.ImmutableMap;
 import com.liferay.portal.model.User;
-import java.io.File;
-import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.StringReader;
@@ -142,9 +144,10 @@ import javax.ws.rs.container.AsyncResponse;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 import javax.ws.rs.core.Response.Status;
-import org.apache.commons.io.IOUtils;
+import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.io.input.ReaderInputStream;
 import org.apache.commons.lang.RandomStringUtils;
+import org.glassfish.jersey.internal.util.Base64;
 import org.glassfish.jersey.media.multipart.BodyPart;
 import org.glassfish.jersey.media.multipart.ContentDisposition;
 import org.glassfish.jersey.media.multipart.FormDataBodyPart;
@@ -178,19 +181,21 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
         workflowAPI =  APILocator.getWorkflowAPI();
         contentletAPI = APILocator.getContentletAPI();
         roleAPI = APILocator.getRoleAPI();
-        ContentHelper contentHelper = ContentHelper.getInstance();
-        PermissionAPI permissionAPI = APILocator.getPermissionAPI();
-        WorkflowImportExportUtil workflowImportExportUtil = getInstance();
-        WorkflowHelper workflowHelper = new WorkflowHelper(workflowAPI, roleAPI, contentletAPI, permissionAPI,
+        final ContentHelper contentHelper = ContentHelper.getInstance();
+        final SystemActionApiFireCommandFactory systemActionApiFireCommandFactory =
+                SystemActionApiFireCommandFactory.getInstance();
+        final PermissionAPI permissionAPI = APILocator.getPermissionAPI();
+        final WorkflowImportExportUtil workflowImportExportUtil = getInstance();
+        final WorkflowHelper workflowHelper = new WorkflowHelper(workflowAPI, roleAPI, contentletAPI, permissionAPI,
                 workflowImportExportUtil);
-        ResponseUtil responseUtil = ResponseUtil.INSTANCE;
+        final ResponseUtil responseUtil = ResponseUtil.INSTANCE;
 
         final User user = mock(User.class);
         when(user.getUserId()).thenReturn(ADMIN_DEFAULT_ID);
         when(user.getEmailAddress()).thenReturn(ADMIN_DEFAULT_MAIL);
         when(user.getFullName()).thenReturn(ADMIN_NAME);
         when(user.getLocale()).thenReturn(Locale.getDefault());
-
+        when(user.isBackendUser()).thenReturn(true);
         final WebResource webResource = mock(WebResource.class);
         final InitDataObject dataObject = mock(InitDataObject.class);
         when(dataObject.getUser()).thenReturn(user);
@@ -199,7 +204,8 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
                         anyString())).thenReturn(dataObject);
 
         workflowResource = new WorkflowResource(workflowHelper, contentHelper, workflowAPI,
-                contentletAPI, responseUtil, permissionAPI, workflowImportExportUtil, new MultiPartUtils(), webResource);
+                contentletAPI, responseUtil, permissionAPI, workflowImportExportUtil, new MultiPartUtils(), webResource,
+                systemActionApiFireCommandFactory);
 
         contentTypeAPI = APILocator.getContentTypeAPI(APILocator.systemUser());
         systemUser = APILocator.systemUser();
@@ -231,11 +237,11 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
         doCleanUp(workflowAPI);
 
         try {
-            adminRole = roleAPI.loadRoleByKey(ADMINISTRATOR);
+            adminRole = roleAdmin();
             if (adminRole != null) {
                 RoleDataGen.remove(adminRole);
             }
-        } catch (DotDataException e) {
+        } catch (Exception e) {
             // Do nothing...
         }
 
@@ -290,7 +296,7 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
             workflowAction1.setId(UUIDGenerator.generateUuid());
             workflowAction1.setShowOn(WorkflowState.LOCKED, WorkflowState.PUBLISHED, WorkflowState.UNPUBLISHED, WorkflowState.EDITING);
             workflowAction1.setNextStep(workflowStep2.getId());
-            workflowAction1.setNextAssign(roleAPI.loadRoleByKey(ADMINISTRATOR).getId());
+            workflowAction1.setNextAssign(roleAdmin().getId());
             workflowAction1.setSchemeId(scheme.getId());
             workflowAction1.setName("save");
             workflowAction1.setOrder(0);
@@ -302,7 +308,7 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
             workflowAction2.setId(UUIDGenerator.generateUuid());
             workflowAction2.setShowOn(WorkflowState.LOCKED, WorkflowState.PUBLISHED, WorkflowState.UNPUBLISHED, WorkflowState.EDITING);
             workflowAction2.setNextStep(workflowStep2.getId());
-            workflowAction2.setNextAssign(roleAPI.loadRoleByKey(ADMINISTRATOR).getId());
+            workflowAction2.setNextAssign(roleAdmin().getId());
             workflowAction2.setSchemeId(scheme.getId());
             workflowAction2.setName("save/publish");
             workflowAction2.setOrder(1);
@@ -314,7 +320,7 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
             workflowAction3.setId(UUIDGenerator.generateUuid());
             workflowAction3.setShowOn(WorkflowState.LOCKED, WorkflowState.PUBLISHED, WorkflowState.EDITING);
             workflowAction3.setNextStep(WorkflowAction.CURRENT_STEP);
-            workflowAction3.setNextAssign(roleAPI.loadRoleByKey(ADMINISTRATOR).getId());
+            workflowAction3.setNextAssign(roleAdmin().getId());
             workflowAction3.setSchemeId(scheme.getId());
             workflowAction3.setName("finish");
             workflowAction3.setOrder(2);
@@ -357,7 +363,8 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
 
             final WorkflowSchemeImportObjectForm exportObjectForm =
                     new WorkflowSchemeImportObjectForm(
-                            new WorkflowSchemeImportExportObjectView(WorkflowResource.VERSION,schemes,steps,actions,actionSteps,Collections.emptyList(),Collections.emptyList()),
+                            new WorkflowSchemeImportExportObjectView(WorkflowResource.VERSION,schemes,steps,actions,actionSteps, Collections.emptyList(),
+                                    Collections.emptyList(),Collections.emptyList()),
                             permissions);
 
             final Response importResponse = workflowResource.importScheme(request, new EmptyHttpResponse(), exportObjectForm);
@@ -456,7 +463,7 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
 
     @Test
     public void testCreateSchemeThenAddStepsThenAddActions() throws Exception{
-        final Role adminRole = roleAPI.loadRoleByKey(ADMINISTRATOR);
+        final Role adminRole =  roleAdmin();
         final String adminRoleId = adminRole.getId();
         final WorkflowScheme savedScheme = createScheme(workflowResource);
         assertNotNull(savedScheme);
@@ -467,7 +474,6 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
     }
 
     @Test
-    @WrapInTransaction
     public void testCreateSchemeThenAddStepsThenDeleteSteps() {
         final int numSteps = 5;
         final WorkflowScheme savedScheme = createScheme(workflowResource);
@@ -584,7 +590,7 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
     @SuppressWarnings("unchecked")
     @Test
     public void testSaveActionToStepThenFindActionsBySchemeThenFindByStep() throws Exception{
-        final Role adminRole = roleAPI.loadRoleByKey(ADMINISTRATOR);
+        final Role adminRole =  roleAdmin();
         final String adminRoleId = adminRole.getId();
         final WorkflowScheme savedScheme = createScheme(workflowResource);
         assertNotNull(savedScheme);
@@ -603,6 +609,7 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
                 request1, new EmptyHttpResponse(), secondStep.getId(),
                 new WorkflowActionStepForm.Builder().actionId(firstAction.getId()).build()
         );
+        assertEquals(200, saveActionToStepResponse.getStatus());
         final ResponseEntityView updateResponseEv = ResponseEntityView.class.cast(saveActionToStepResponse.getEntity());
         assertEquals(ResponseEntityView.OK,updateResponseEv.getEntity());
 
@@ -624,7 +631,7 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
     @SuppressWarnings("unchecked")
     @Test
     public void testFindActionsByStepThenDeleteThem() throws Exception{
-        final Role adminRole = roleAPI.loadRoleByKey(ADMINISTRATOR);
+        final Role adminRole =  roleAdmin();
         final String adminRoleId = adminRole.getId();
         final WorkflowScheme savedScheme = createScheme(workflowResource);
         assertNotNull(savedScheme);
@@ -667,7 +674,7 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
 
     @Test
     public void testUpdateAction() throws Exception{
-        final Role adminRole = roleAPI.loadRoleByKey(ADMINISTRATOR);
+        final Role adminRole =  roleAdmin();
         final String adminRoleId = adminRole.getId();
         final WorkflowScheme savedScheme = createScheme(workflowResource);
         assertNotNull(savedScheme);
@@ -714,7 +721,7 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
     @SuppressWarnings("unchecked")
     @Test
     public void testDeleteScheme() throws Exception{
-        final Role adminRole = roleAPI.loadRoleByKey(ADMINISTRATOR);
+        final Role adminRole =  roleAdmin();
         final String adminRoleId = adminRole.getId();
         final WorkflowScheme savedScheme = createScheme(workflowResource);
         assertNotNull(savedScheme);
@@ -924,8 +931,14 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
                final List<Contentlet> contentlets = samples.get(ct);
                if(UtilMethods.isSet(contentlets)){
                    final Contentlet contentlet = contentlets.get(0);
+                   DateUtil.sleep(DateUtil.TWO_SECOND_MILLIS);
+                   workflowAPI.deleteWorkflowTaskByContentletIdAnyLanguage(contentlet, adminUser);
+                   contentlet.setIndexPolicy(IndexPolicy.WAIT_FOR);
+                   APILocator.getContentletIndexAPI().addContentToIndex(contentlet);
                    final List<WorkflowStep> steps = workflowAPI.findStepsByContentlet(contentlet);
+                   Logger.info(this, "**** steps" + steps);
                    final List<WorkflowAction> actions = workflowAPI.findActions(steps, APILocator.systemUser());
+                   Logger.info(this, "**** actions" + actions);
 
                    final WorkflowAction action = actions.stream().findAny().get();
                    final HttpServletRequest request = mock(HttpServletRequest.class);
@@ -954,13 +967,14 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
 
         final List<WorkflowAction> documentActions = getAllWorkflowActions(documentManagementScheme);
 
+        Logger.info(this, "documentActions: " + documentActions);
         //step 1 Document Management Actions.
-        assertTrue(documentActions.stream()
+        /*assertTrue(documentActions.stream()
                 .anyMatch(action -> SAVE_AS_DRAFT.equals(action.getName())));
         assertTrue(documentActions.stream()
                 .anyMatch(action -> SEND_FOR_REVIEW.equals(action.getName())));
         assertTrue(documentActions.stream()
-                .anyMatch(action -> SEND_TO_LEGAL.equals(action.getName())));
+                .anyMatch(action -> SEND_TO_LEGAL.equals(action.getName())));*/
         assertTrue(documentActions.stream().anyMatch(action -> PUBLISH.equals(action.getName())));
 
         return documentActions;
@@ -972,8 +986,6 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
 
         //step 1 System Workflow Actions.
         assertTrue(systemActions.stream().anyMatch(action -> SAVE.equals(action.getName())));
-        assertTrue(systemActions.stream()
-               .anyMatch(action -> SAVE_PUBLISH.equals(action.getName())));
         return systemActions;
     }
 
@@ -1041,6 +1053,8 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
                 ).collect(Collectors.toSet())
         );
 
+        Logger.info(this, "findSchemesForContentType: " + workflowAPI.findSchemesForContentType(contentType));
+
         return contentType;
     }
 
@@ -1055,7 +1069,7 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
         // Create a content sample
         contentlet = new Contentlet();
         // instruct the content with its own type
-        contentlet.setStructureInode(contentType.inode());
+        contentlet.setContentTypeId(contentType.inode());
         contentlet.setHost(host.getIdentifier());
         contentlet.setLanguageId(languageAPI.getDefaultLanguage().getId());
 
@@ -1075,6 +1089,8 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
     @Test
     public void Test_Find_Bulk_Actions_Then_Fire_Bulk_Actions_On_Custom_Content_Type_Then_Verify_Workflow_Changed()
             throws Exception {
+
+        ReindexThread.pause();
 
         // Prep Workflows, they must have at least one action visible on the first step.
         final WorkflowScheme sysWorkflow = workflowAPI.findSchemeByName(SYSTEM_WORKFLOW);
@@ -1113,10 +1129,15 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
             // We create a contentType that is associated with the two workflows that come out of the box.
             final ContentType contentType = createSampleContentType();
             //Then we create an instance
-            final Contentlet contentlet = createSampleContent(contentType);
+            final Contentlet contentlet   = createSampleContent(contentType);
             final String inode = contentlet.getInode();
 
             try {
+
+                workflowAPI.deleteWorkflowTaskByContentletIdAnyLanguage(contentlet, APILocator.systemUser());
+                contentlet.setIndexPolicy(IndexPolicy.FORCE);
+                APILocator.getContentletIndexAPI().addContentToIndex(contentlet);
+
                 //  Now Test BulkActions
                 final BulkActionForm form1 = new BulkActionForm(
                         Collections.singletonList(inode), null
@@ -1132,6 +1153,8 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
                         .cast(beforeFireEntityView.getEntity());
                 assertNotNull(bulkActionView);
                 final List<BulkWorkflowSchemeView> schemes1 = bulkActionView.getSchemes();
+
+                Logger.info(this, "schemes1: " + schemes1.toString());
 
                 final Optional<BulkWorkflowSchemeView> documentManagementOptional1 = schemes1
                         .stream()
@@ -1252,8 +1275,7 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
             } finally {
 
                 if (contentlet != null) {
-                    contentletAPI.archive(contentlet, systemUser, false);
-                    contentletAPI.delete(contentlet, systemUser, false);
+                    contentletAPI.destroy(contentlet, systemUser, false );
                 }
                 if (contentType != null) {
                     contentTypeAPI.delete(contentType);
@@ -1271,6 +1293,8 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
                 action.setShowOn(docWorkflowShowOn.get(action.getId()));
                 workflowAPI.saveAction(action, null, adminUser);
             }
+
+            ReindexThread.unpause();
         }
     }
 
@@ -1470,7 +1494,7 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
                 final FireActionForm fireActionForm1 = new FireActionForm(builder1);
                 final HttpServletRequest request1 = mock(HttpServletRequest.class);
                 final Response response1 = workflowResource
-                        .fireAction(request1, new EmptyHttpResponse(), saveAndPublishActionId, null, null, -1,  fireActionForm1);
+                        .fireAction(request1, new EmptyHttpResponse(), saveAndPublishActionId, null, null, "-1",  fireActionForm1);
 
                 final int statusCode1 = response1.getStatus();
                 assertEquals(Status.OK.getStatusCode(), statusCode1);
@@ -1490,7 +1514,7 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
                 final FireActionForm fireActionForm2 = new FireActionForm(builder2);
                 final HttpServletRequest request2 = mock(HttpServletRequest.class);
                 final Response response2 = workflowResource
-                     .fireAction(request2, new EmptyHttpResponse(), saveAndPublishActionId, brandNewContentlet.getInode(), null, -1, fireActionForm2);
+                     .fireAction(request2, new EmptyHttpResponse(), saveAndPublishActionId, brandNewContentlet.getInode(), null, "-1", fireActionForm2);
 
                 final int statusCode2 = response2.getStatus();
                 assertEquals(Status.OK.getStatusCode(), statusCode2);
@@ -1504,8 +1528,7 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
 
              }finally {
                 if(null != brandNewContentlet){
-                     contentletAPI.archive(brandNewContentlet, APILocator.systemUser(), false);
-                     contentletAPI.delete(brandNewContentlet, APILocator.systemUser(), false);
+                    contentletAPI.destroy(brandNewContentlet, APILocator.systemUser(), false );
                 }
             }
 
@@ -1568,6 +1591,9 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
             "   }\n" +
             "}";
 
+    private static final String RELATIONSHIP_FIELD_NAME = "relationshipField";
+    private static final String CATEGORY_FIELD_NAME = "categoryField";
+
     @Test
     public void test_Fire_Save_Content_Type_Binary_File() throws Exception {
 
@@ -1614,26 +1640,26 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
                 FormDataMultiPart formDataMultiPart = this.createFormMultiPart(contentType, inputFile1Text, inputFile2Text);
                 final HttpServletRequest request1 = mock(HttpServletRequest.class);
                 final Response response1 = workflowResource
-                        .fireActionMultipart(request1, new EmptyHttpResponse(), SAVE_ACTION_ID, null,null,-1, formDataMultiPart);
+                        .fireActionMultipart(request1, new EmptyHttpResponse(), SAVE_ACTION_ID, null,null,"-1", formDataMultiPart);
                 final int statusCode1 = response1.getStatus();
                 assertEquals(Status.OK.getStatusCode(), statusCode1);
                 final ResponseEntityView fireEntityView1 = ResponseEntityView.class
                         .cast(response1.getEntity());
                 brandNewContentlet = new Contentlet(Map.class.cast(fireEntityView1.getEntity()));
-                checkBrandNewContentlet(fieldNameTitle, fieldNameFile1, fieldNameFile2, inputFile1Text, inputFile2Text, brandNewContentlet);
+                checkBrandNewContentlet(fieldNameTitle, fieldNameFile1, fieldNameFile2, brandNewContentlet);
 
                 // update existing by content inode.
-                formDataMultiPart = this.createFormMultiPart(contentType, inputFile1Text, inputFile2Text);
+                formDataMultiPart = this.createFormMultiPart(contentType, inputFile1Text,inputFile2Text);
                 final HttpServletRequest request2 = mock(HttpServletRequest.class);
                 final Response response2 = workflowResource
-                        .fireActionMultipart(request2, new EmptyHttpResponse(), SAVE_ACTION_ID, brandNewContentlet.getInode(),null,-1, formDataMultiPart);
+                        .fireActionMultipart(request2, new EmptyHttpResponse(), SAVE_ACTION_ID, brandNewContentlet.getInode(),null,"-1", formDataMultiPart);
                 final int statusCode2 = response2.getStatus();
                 assertEquals(Status.OK.getStatusCode(), statusCode2);
                 final ResponseEntityView fireEntityView2 = ResponseEntityView.class
                         .cast(response2.getEntity());
                 String identifier = brandNewContentlet.getIdentifier();
                 brandNewContentlet = new Contentlet(Map.class.cast(fireEntityView2.getEntity()));
-                checkBrandNewContentlet(fieldNameTitle, fieldNameFile1, fieldNameFile2, inputFile1Text, inputFile2Text, brandNewContentlet);
+                checkBrandNewContentlet(fieldNameTitle, fieldNameFile1, fieldNameFile2, brandNewContentlet);
                 assertEquals(identifier, brandNewContentlet.getIdentifier());
 
                 // update existing by identifier
@@ -1641,18 +1667,17 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
                 final HttpServletRequest request3 = mock(HttpServletRequest.class);
                 identifier = brandNewContentlet.getIdentifier();
                 final Response response3 = workflowResource
-                        .fireActionMultipart(request3, new EmptyHttpResponse(), SAVE_ACTION_ID, null,identifier,-1, formDataMultiPart);
+                        .fireActionMultipart(request3, new EmptyHttpResponse(), SAVE_ACTION_ID, null,identifier,"-1", formDataMultiPart);
                 final int statusCode3 = response3.getStatus();
                 assertEquals(Status.OK.getStatusCode(), statusCode3);
                 final ResponseEntityView fireEntityView3 = ResponseEntityView.class
                         .cast(response3.getEntity());
                 brandNewContentlet = new Contentlet(Map.class.cast(fireEntityView3.getEntity()));
-                checkBrandNewContentlet(fieldNameTitle, fieldNameFile1, fieldNameFile2, inputFile1Text, inputFile2Text, brandNewContentlet);
+                checkBrandNewContentlet(fieldNameTitle, fieldNameFile1, fieldNameFile2, brandNewContentlet);
                 assertEquals(identifier, brandNewContentlet.getIdentifier());
             } finally {
                 if(null != brandNewContentlet){
-                    contentletAPI.archive(brandNewContentlet, APILocator.systemUser(), false);
-                    contentletAPI.delete(brandNewContentlet, APILocator.systemUser(), false);
+                    contentletAPI.destroy(brandNewContentlet, APILocator.systemUser(), false );
                 }
             }
 
@@ -1666,50 +1691,67 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
     private FormDataMultiPart createFormMultiPart(final ContentType contentType, final String inputFile1Text,
                                                   final String inputFile2Text) {
         final Charset           charset              = Charset.defaultCharset();
+
         final FormDataMultiPart formDataMultiPart    = mock(FormDataMultiPart.class);
+
         final BodyPart          bodyPart             = mock(BodyPart.class);
         final ContentDisposition contentDisposition1 = mock(ContentDisposition.class);
         final ContentDisposition contentDisposition2 = mock(ContentDisposition.class);
         final ContentDisposition contentDisposition3 = mock(ContentDisposition.class);
+
         final ImmutableMap<String, String> params    = ImmutableMap.of("name", "json");
+
         final FormDataBodyPart formDataBodyPart1     = mock(FormDataBodyPart.class);
         final FormDataBodyPart formDataBodyPart2     = mock(FormDataBodyPart.class);
+
         when(formDataMultiPart.getBodyParts()).thenReturn(Arrays.asList(bodyPart));
         when(formDataMultiPart.getFields("file")).thenReturn(Arrays.asList(formDataBodyPart1, formDataBodyPart2));
+
         when(bodyPart.getContentDisposition()).thenReturn(contentDisposition1);
         when(bodyPart.getMediaType()).thenReturn(MediaType.APPLICATION_JSON_TYPE);
+
         final String jsonBody = String.format(MULTIPART_JSON, contentType.variable());
         when(bodyPart.getEntityAs(InputStream.class))
                 .thenReturn(new ReaderInputStream(new StringReader(jsonBody), charset));
+
         when(contentDisposition1.getParameters()).thenReturn(params);
         when(contentDisposition2.getFileName()).thenReturn("file1.txt");
-        when(formDataBodyPart1.getContentDisposition()).thenReturn(contentDisposition2);
         when(contentDisposition3.getFileName()).thenReturn("file2.txt");
+
+        when(formDataBodyPart1.getContentDisposition()).thenReturn(contentDisposition2);
         when(formDataBodyPart2.getContentDisposition()).thenReturn(contentDisposition3);
+
         when(formDataBodyPart1.getEntityAs(InputStream.class))
                 .thenReturn(new ReaderInputStream(new StringReader(inputFile1Text), charset));
+
         when(formDataBodyPart2.getEntityAs(InputStream.class))
                 .thenReturn(new ReaderInputStream(new StringReader(inputFile2Text), charset));
+
         return formDataMultiPart;
     }
 
-    private void checkBrandNewContentlet(String fieldNameTitle, String fieldNameFile1, String fieldNameFile2, String inputFile1Text, String inputFile2Text, Contentlet brandNewContentlet) throws IOException {
+    private void checkBrandNewContentlet(String fieldNameTitle, String fieldNameFile1, String fieldNameFile2, Contentlet brandNewContentlet) throws IOException {
         assertNotNull(brandNewContentlet);
         assertNotNull(brandNewContentlet.getMap());
         assertTrue(brandNewContentlet.getMap().containsKey(fieldNameTitle));
         assertTrue(brandNewContentlet.getMap().containsKey(fieldNameFile1));
         assertTrue(brandNewContentlet.getMap().containsKey(fieldNameFile2));
         assertEquals("Test", brandNewContentlet.getMap().get("title"));
-        final File file1 = brandNewContentlet.getBinary("file1");
-        final File file2 = brandNewContentlet.getBinary("file2");
-        assertNotNull(file1);
-        assertNotNull(file1);
-        final String fileString1 = IOUtils.toString(new FileReader(file1));
-        final String fileString2 = IOUtils.toString(new FileReader(file2));
-        assertNotNull(fileString1);
-        assertNotNull(fileString2);
-        assertEquals(inputFile1Text, fileString1);
-        assertEquals(inputFile2Text, fileString2);
+
+        final String dAPath1 =  (String)brandNewContentlet.get("file1");
+        final String dAPath2 =  (String)brandNewContentlet.get("file2");
+
+        final String dAPathFormat = "/dA/%s/%s/%s";
+
+        assertEquals("File dAPath don't match",dAPath1,String.format(dAPathFormat, brandNewContentlet.getIdentifier(), "file1", FilenameUtils.getName(dAPath1)));
+        assertEquals("File dAPath don't match",dAPath2,String.format(dAPathFormat, brandNewContentlet.getIdentifier(), "file2", FilenameUtils.getName(dAPath2)));
+
+        final String dAPathVersion1 =  (String)brandNewContentlet.get("file1Version");
+        final String dAPathVersion2 =  (String)brandNewContentlet.get("file2Version");
+
+        assertEquals("Version file don't match",dAPathVersion1,String.format(dAPathFormat, brandNewContentlet.getInode(), "file1", FilenameUtils.getName(dAPathVersion1)));
+        assertEquals("Version file don't match",dAPathVersion2,String.format(dAPathFormat, brandNewContentlet.getInode(), "file2", FilenameUtils.getName(dAPathVersion2)));
+
     }
 
     @Test
@@ -1750,7 +1792,7 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
                 final FireActionForm fireActionForm1 = new FireActionForm(builder1);
                 final HttpServletRequest request1 = mock(HttpServletRequest.class);
                 final Response response1 = workflowResource
-                        .fireAction(request1, new EmptyHttpResponse(), SAVE_ACTION_ID, null,null,-1, fireActionForm1);
+                        .fireAction(request1, new EmptyHttpResponse(), SAVE_ACTION_ID, null,null,"-1", fireActionForm1);
 
                 final int statusCode1 = response1.getStatus();
                 assertEquals(Status.OK.getStatusCode(), statusCode1);
@@ -1774,7 +1816,7 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
                 final FireActionForm fireActionForm2 = new FireActionForm(builder2);
                 final HttpServletRequest request2 = mock(HttpServletRequest.class);
                 final Response response2 = workflowResource
-                        .fireAction(request2, new EmptyHttpResponse(), SAVE_ACTION_ID, brandNewContentlet.getInode(), null, -1, fireActionForm2);
+                        .fireAction(request2, new EmptyHttpResponse(), SAVE_ACTION_ID, brandNewContentlet.getInode(), null, "-1", fireActionForm2);
 
                 final int statusCode2 = response2.getStatus();
                 assertEquals(Status.OK.getStatusCode(), statusCode2);
@@ -1795,8 +1837,7 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
 
             }finally {
                 if(null != brandNewContentlet){
-                    contentletAPI.archive(brandNewContentlet, APILocator.systemUser(), false);
-                    contentletAPI.delete(brandNewContentlet, APILocator.systemUser(), false);
+                    contentletAPI.destroy(brandNewContentlet, APILocator.systemUser(), false );
                 }
             }
 
@@ -1832,7 +1873,7 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
             final FireActionForm fireActionForm1 = new FireActionForm(builder1);
             final HttpServletRequest request1 = mock(HttpServletRequest.class);
             final Response response1 = workflowResource
-                    .fireAction(request1, new EmptyHttpResponse(), SAVE_ACTION_ID, null, null, -1, fireActionForm1);
+                    .fireAction(request1, new EmptyHttpResponse(), SAVE_ACTION_ID, null, null, "-1", fireActionForm1);
 
             final int statusCode1 = response1.getStatus();
             assertEquals(Status.OK.getStatusCode(), statusCode1);
@@ -1855,7 +1896,7 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
             final FireActionForm fireActionForm2 = new FireActionForm(builder2);
             final HttpServletRequest request2 = mock(HttpServletRequest.class);
             final Response response2 = workflowResource
-                    .fireAction(request2, new EmptyHttpResponse(), SAVE_ACTION_ID, brandNewContentlet.getInode(), null, -1, fireActionForm2);
+                    .fireAction(request2, new EmptyHttpResponse(), SAVE_ACTION_ID, brandNewContentlet.getInode(), null, "-1", fireActionForm2);
 
             final int statusCode2 = response2.getStatus();
             assertEquals(Status.OK.getStatusCode(), statusCode2);
@@ -1902,7 +1943,7 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
             final FireActionForm fireActionForm1 = new FireActionForm(builder1);
             final HttpServletRequest request1 = mock(HttpServletRequest.class);
             final Response response1 = workflowResource
-                    .fireAction(request1, new EmptyHttpResponse(), SAVE_ACTION_ID, null, null, -1, fireActionForm1);
+                    .fireAction(request1, new EmptyHttpResponse(), SAVE_ACTION_ID, null, null, "-1", fireActionForm1);
 
             final int statusCode1 = response1.getStatus();
             assertEquals(Status.OK.getStatusCode(), statusCode1);
@@ -1925,7 +1966,7 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
             final FireActionForm fireActionForm2 = new FireActionForm(builder2);
             final HttpServletRequest request2 = mock(HttpServletRequest.class);
             final Response response2 = workflowResource
-                    .fireAction(request2, new EmptyHttpResponse(), SAVE_ACTION_ID, brandNewContentlet.getInode(), null, -1, fireActionForm2);
+                    .fireAction(request2, new EmptyHttpResponse(), SAVE_ACTION_ID, brandNewContentlet.getInode(), null, "-1", fireActionForm2);
 
             final int statusCode2 = response2.getStatus();
             assertEquals(Status.OK.getStatusCode(), statusCode2);
@@ -1971,7 +2012,7 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
             final FireActionForm fireActionForm1 = new FireActionForm(builder1);
             final HttpServletRequest request1 = mock(HttpServletRequest.class);
             final Response response1 = workflowResource
-                    .fireAction(request1, new EmptyHttpResponse(), SAVE_ACTION_ID, null, null, -1, fireActionForm1);
+                    .fireAction(request1, new EmptyHttpResponse(), SAVE_ACTION_ID, null, null, "-1", fireActionForm1);
 
             final int statusCode1 = response1.getStatus();
             assertEquals(Status.OK.getStatusCode(), statusCode1);
@@ -1991,7 +2032,7 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
             final FireActionForm fireActionForm2 = new FireActionForm(builder2);
             final HttpServletRequest request2 = mock(HttpServletRequest.class);
             final Response response2 = workflowResource
-                    .fireAction(request2, new EmptyHttpResponse(), SAVE_ACTION_ID, brandNewContentlet.getInode(), null, -1, fireActionForm2);
+                    .fireAction(request2, new EmptyHttpResponse(), SAVE_ACTION_ID, brandNewContentlet.getInode(), null, "-1", fireActionForm2);
 
             final int statusCode2 = response2.getStatus();
             assertEquals(Status.BAD_REQUEST.getStatusCode(), statusCode2);
@@ -2003,6 +2044,177 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
                 contentTypeAPI.delete(contentType);
             }
         }
+    }
+
+    @Test
+    public void testFireActionDefault_ContentWithRelationships_Success() throws Exception {
+        ContentType childContentType = null;
+        ContentType parentContentType = null;
+        try{
+            //Create childContentType
+            childContentType = createSampleContentType();
+
+            //Create parentContentType and add relationship field to childContentType
+            parentContentType = createRelationshipFieldContentType(childContentType.variable());
+
+            //Create child Content
+            final FireActionForm.Builder builder1 = new FireActionForm.Builder();
+            final Map <String,Object>contentletFormData = new HashMap<>();
+            contentletFormData.put("stInode", childContentType.inode());
+            contentletFormData.put(REQUIRED_TEXT_FIELD_NAME, REQUIRED_TEXT_FIELD_VALUE);
+            builder1.contentlet(contentletFormData);
+            final FireActionForm fireActionForm1 = new FireActionForm(builder1);
+            final HttpServletRequest request1 = getHttpRequest();
+            final Response response1 = workflowResource
+                    .fireActionDefault(request1, new EmptyHttpResponse(), null, null,
+                            String.valueOf(languageAPI.getDefaultLanguage().getId()), SystemAction.PUBLISH,  fireActionForm1);
+            final int statusCode1 = response1.getStatus();
+            assertEquals(Status.OK.getStatusCode(), statusCode1);
+            final ResponseEntityView fireEntityView1 = ResponseEntityView.class
+                    .cast(response1.getEntity());
+            final Contentlet childContentlet = new Contentlet (Map.class.cast(fireEntityView1.getEntity()));
+            assertNotNull(childContentlet);
+            assertEquals(REQUIRED_TEXT_FIELD_VALUE, childContentlet.getMap().get(REQUIRED_TEXT_FIELD_NAME));
+
+            //Create parent Content
+            final FireActionForm.Builder builder2 = new FireActionForm.Builder();
+            final Map <String,Object>contentletFormData2 = new HashMap<>();
+            contentletFormData2.put("stInode", parentContentType.inode());
+            contentletFormData2.put(REQUIRED_TEXT_FIELD_NAME, REQUIRED_TEXT_FIELD_VALUE);
+            contentletFormData2.put(RELATIONSHIP_FIELD_NAME,childContentlet.getIdentifier());
+            builder2.contentlet(contentletFormData2);
+            final FireActionForm fireActionForm2 = new FireActionForm(builder2);
+            final HttpServletRequest request2 = getHttpRequest();
+            final Response response2 = workflowResource
+                    .fireActionDefault(request2, new EmptyHttpResponse(), null, null,
+                            String.valueOf(languageAPI.getDefaultLanguage().getId()), SystemAction.PUBLISH,  fireActionForm2);
+            final int statusCode2 = response2.getStatus();
+            assertEquals(Status.OK.getStatusCode(), statusCode2);
+            final ResponseEntityView fireEntityView2 = ResponseEntityView.class
+                    .cast(response2.getEntity());
+            final Contentlet parentContentlet = new Contentlet (Map.class.cast(fireEntityView2.getEntity()));
+            assertNotNull(parentContentlet);
+            assertEquals(REQUIRED_TEXT_FIELD_VALUE, parentContentlet.getMap().get(REQUIRED_TEXT_FIELD_NAME));
+            assertEquals(1,contentletAPI.getAllRelationships(parentContentlet).getRelationshipsRecords().size());
+            assertEquals(childContentlet.getIdentifier(),contentletAPI.getAllRelationships(parentContentlet).getRelationshipsRecords().get(0).getRecords().get(0).getIdentifier());
+
+        }finally {
+            if (null != childContentType) {
+                contentTypeAPI.delete(childContentType);
+            }
+            if (null != parentContentType) {
+                contentTypeAPI.delete(parentContentType);
+            }
+        }
+    }
+
+    private ContentType createRelationshipFieldContentType(final String childContentTypeVariable) throws Exception{
+        ContentType contentType;
+        final String ctPrefix = "TestContentType";
+        final String newContentTypeName = ctPrefix + System.currentTimeMillis();
+
+        // Create ContentType
+        contentType = createContentTypeAndAssignPermissions(newContentTypeName,
+                BaseContentType.CONTENT, PermissionAPI.PERMISSION_READ, adminRole.getId());
+        final WorkflowScheme systemWorkflow = workflowAPI.findSystemWorkflowScheme();
+        final WorkflowScheme documentWorkflow = workflowAPI.findSchemeByName(DM_WORKFLOW);
+
+        // Add fields to the contentType
+        final Field textField =
+                FieldBuilder.builder(TextField.class).name(REQUIRED_TEXT_FIELD_NAME).variable(REQUIRED_TEXT_FIELD_NAME)
+                        .required(true)
+                        .contentTypeId(contentType.id()).dataType(DataTypes.TEXT).build();
+
+        final Field relationshipField =
+                FieldBuilder.builder(RelationshipField.class).name(RELATIONSHIP_FIELD_NAME).contentTypeId(contentType.id())
+                        .values(String.valueOf(RELATIONSHIP_CARDINALITY.MANY_TO_MANY.ordinal())).relationType(childContentTypeVariable).build();
+        contentType = contentTypeAPI.save(contentType, Arrays.asList(textField, relationshipField));
+
+        // Assign contentType to Workflows
+        workflowAPI.saveSchemeIdsForContentType(contentType,
+                Stream.of(
+                        systemWorkflow.getId(),
+                        documentWorkflow.getId()
+                ).collect(Collectors.toSet())
+        );
+
+        return contentType;
+    }
+
+    @Test
+    public void testFireActionDefault_ContentWithCategories_Success() throws Exception {
+        ContentType categoryContentType = null;
+        try{
+            //Create Categories
+            final CategoryDataGen rootCategoryDataGen = new CategoryDataGen().setCategoryName("Bikes-"+System.currentTimeMillis()).setKey("Bikes").setKeywords("Bikes").setCategoryVelocityVarName("bikes");
+            final Category child1 = new CategoryDataGen().setCategoryName("RoadBike-"+System.currentTimeMillis()).setKey("RoadBike").setKeywords("RoadBike").setCategoryVelocityVarName("roadBike").next();
+
+            final Category root = rootCategoryDataGen.children(child1).nextPersisted();
+
+            //Create contentType
+            categoryContentType = createCategoryFieldContentType(root.getInode());
+
+            //Create Content
+            final FireActionForm.Builder builder1 = new FireActionForm.Builder();
+            final Map <String,Object>contentletFormData = new HashMap<>();
+            contentletFormData.put("stInode", categoryContentType.inode());
+            contentletFormData.put(REQUIRED_TEXT_FIELD_NAME, REQUIRED_TEXT_FIELD_VALUE);
+            contentletFormData.put(CATEGORY_FIELD_NAME,child1.getInode());
+            builder1.contentlet(contentletFormData);
+            final FireActionForm fireActionForm1 = new FireActionForm(builder1);
+            final HttpServletRequest request1 = getHttpRequest();
+            final Response response1 = workflowResource
+                    .fireActionDefault(request1, new EmptyHttpResponse(), null, null,
+                            String.valueOf(languageAPI.getDefaultLanguage().getId()), SystemAction.PUBLISH,  fireActionForm1);
+            final int statusCode1 = response1.getStatus();
+            assertEquals(Status.OK.getStatusCode(), statusCode1);
+            final ResponseEntityView fireEntityView1 = ResponseEntityView.class
+                    .cast(response1.getEntity());
+            final Contentlet contentlet = new Contentlet (Map.class.cast(fireEntityView1.getEntity()));
+            assertNotNull(contentlet);
+            assertEquals(REQUIRED_TEXT_FIELD_VALUE, contentlet.getMap().get(REQUIRED_TEXT_FIELD_NAME));
+            assertNotNull(APILocator.getCategoryAPI().getParents(contentlet, adminUser, true));
+            assertEquals(child1.getInode(),APILocator.getCategoryAPI().getParents(contentlet, adminUser, true).get(0).getInode());
+
+
+        }finally {
+            if (null != categoryContentType) {
+                contentTypeAPI.delete(categoryContentType);
+            }
+        }
+    }
+
+    private ContentType createCategoryFieldContentType(final String parentCategoryInode) throws Exception{
+        ContentType contentType;
+        final String ctPrefix = "TestContentType";
+        final String newContentTypeName = ctPrefix + System.currentTimeMillis();
+
+        // Create ContentType
+        contentType = createContentTypeAndAssignPermissions(newContentTypeName,
+                BaseContentType.CONTENT, PermissionAPI.PERMISSION_READ, adminRole.getId());
+        final WorkflowScheme systemWorkflow = workflowAPI.findSystemWorkflowScheme();
+        final WorkflowScheme documentWorkflow = workflowAPI.findSchemeByName(DM_WORKFLOW);
+
+        // Add fields to the contentType
+        final Field textField =
+                FieldBuilder.builder(TextField.class).name(REQUIRED_TEXT_FIELD_NAME).variable(REQUIRED_TEXT_FIELD_NAME)
+                        .required(true)
+                        .contentTypeId(contentType.id()).dataType(DataTypes.TEXT).build();
+
+        final Field categoryField =
+                FieldBuilder.builder(CategoryField.class).name(CATEGORY_FIELD_NAME).contentTypeId(contentType.id()).indexed(true).required(true)
+                        .values(parentCategoryInode).build();
+        contentType = contentTypeAPI.save(contentType, Arrays.asList(textField, categoryField));
+
+        // Assign contentType to Workflows
+        workflowAPI.saveSchemeIdsForContentType(contentType,
+                Stream.of(
+                        systemWorkflow.getId(),
+                        documentWorkflow.getId()
+                ).collect(Collectors.toSet())
+        );
+
+        return contentType;
     }
 
     private ContentType createNumericRequiredAndNonRequiredFieldsContentType() throws Exception{
@@ -2138,5 +2350,17 @@ public class WorkflowResourceIntegrationTest extends BaseWorkflowIntegrationTest
 
         return null;
 
+    }
+
+    private static HttpServletRequest getHttpRequest() {
+        MockHeaderRequest request = new MockHeaderRequest(
+                (
+                        new MockSessionRequest(new MockAttributeRequest(new MockHttpRequest("localhost", "/").request()).request())
+                ).request()
+        );
+
+        request.setHeader("Authorization", "Basic " + new String(Base64.encode("admin@dotcms.com:admin".getBytes())));
+
+        return request;
     }
 }

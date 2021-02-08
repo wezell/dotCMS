@@ -1,7 +1,9 @@
 package com.dotcms.datagen;
 
+import com.dotcms.business.WrapInTransaction;
 import com.dotmarketing.beans.Host;
 import com.dotmarketing.business.APILocator;
+import com.dotmarketing.portlets.contentlet.model.Contentlet;
 import com.dotmarketing.portlets.contentlet.model.IndexPolicy;
 
 /**
@@ -12,9 +14,21 @@ public class SiteDataGen extends AbstractDataGen<Host> {
     private final long currentTime = System.currentTimeMillis();
 
     private String name = "test" + currentTime + ".dotcms.com";
+    private String aliases;
+    private boolean isDefault;
 
     public SiteDataGen name(final String name) {
         this.name = name;
+        return this;
+    }
+
+    public SiteDataGen aliases(final String aliases) {
+        this.aliases = aliases;
+        return this;
+    }
+
+    public SiteDataGen setDefault(final boolean isDefault) {
+        this.isDefault = isDefault;
         return this;
     }
 
@@ -23,23 +37,36 @@ public class SiteDataGen extends AbstractDataGen<Host> {
 
         final Host site = new Host();
         site.setHostname(name);
-        site.setDefault(false);
+        site.setDefault(isDefault);
         site.setLanguageId(language.getId());
         site.setIndexPolicy(IndexPolicy.WAIT_FOR);
+        site.setBoolProperty(Contentlet.IS_TEST_MODE, true);
+
+        if (aliases != null) {
+            site.setAliases(aliases);
+        }
 
         return site;
     }
 
+    @WrapInTransaction
     public Host persist(final Host site, boolean publish) {
         try {
+
+            site.setIndexPolicy(IndexPolicy.WAIT_FOR);
+            site.setBoolProperty(Contentlet.IS_TEST_MODE, true);
+            site.setBoolProperty(Contentlet.DISABLE_WORKFLOW, true);
             final Host newSite = APILocator.getHostAPI().save(site, user, false);
             if (publish) {
+                newSite.setIndexPolicy(IndexPolicy.WAIT_FOR);
+                newSite.setBoolProperty(Contentlet.IS_TEST_MODE, true);
+                newSite.setBoolProperty(Contentlet.DISABLE_WORKFLOW, true);
                 APILocator.getHostAPI().publish(newSite, user, false);
             }
 
             return newSite;
         } catch (Exception e) {
-            throw new RuntimeException("Unable to persist Role.", e);
+            throw new RuntimeException("Unable to persist Host.", e);
         }
     }
 

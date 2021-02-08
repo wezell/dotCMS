@@ -1,7 +1,18 @@
 package com.dotcms.cms.login;
 
 import static com.dotmarketing.util.CookieUtil.createJsonWebTokenCookie;
-
+import java.io.Serializable;
+import java.util.Date;
+import java.util.Iterator;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import javax.servlet.http.HttpSession;
+import org.apache.commons.lang3.BooleanUtils;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import com.dotcms.api.web.HttpServletRequestThreadLocal;
 import com.dotcms.auth.providers.jwt.JsonWebTokenUtils;
 import com.dotcms.business.CloseDBIfOpened;
@@ -17,10 +28,10 @@ import com.dotmarketing.business.UserAPI;
 import com.dotmarketing.business.web.UserWebAPI;
 import com.dotmarketing.cms.factories.PublicEncryptionFactory;
 import com.dotmarketing.cms.login.factories.LoginFactory;
-import com.dotmarketing.cms.login.struts.LoginForm;
 import com.dotmarketing.exception.DotDataException;
 import com.dotmarketing.exception.DotSecurityException;
 import com.dotmarketing.util.Config;
+import com.dotmarketing.util.DateUtil;
 import com.dotmarketing.util.Logger;
 import com.dotmarketing.util.SecurityLogger;
 import com.dotmarketing.util.UtilMethods;
@@ -41,17 +52,6 @@ import com.liferay.portal.util.PortalUtil;
 import com.liferay.portal.util.PropsUtil;
 import com.liferay.portal.util.WebKeys;
 import com.liferay.util.InstancePool;
-import java.io.Serializable;
-import java.util.Date;
-import java.util.Iterator;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Optional;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
-import javax.servlet.http.HttpSession;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 
 /**
  * Login Service Factory that allows developers to inject custom login services.
@@ -61,6 +61,8 @@ import org.apache.commons.logging.LogFactory;
  * @since Jun 20, 2016
  */
 public class LoginServiceAPIFactory implements Serializable {
+
+     private static final String BACKEND_LOGIN = "backendLogin";
 
 	/**
 	 * Used to keep the instance of the {@link LoginServiceAPI}. Should be volatile
@@ -219,6 +221,20 @@ public class LoginServiceAPIFactory implements Serializable {
             return LoginServiceAPI.super.isLoggedIn(req);
         }
 
+        
+        @CloseDBIfOpened
+        @Override
+        public boolean doBackEndLogin(String userId,
+                                     final String password,
+                                     final boolean rememberMe,
+                                     final HttpServletRequest request,
+                                     final HttpServletResponse response) throws Exception {
+            request.setAttribute(BACKEND_LOGIN,true);
+            final boolean success = doActionLogin(userId, password,rememberMe,request,response);
+            return success;
+        
+        }
+        
         @CloseDBIfOpened
         @Override
         public boolean doActionLogin(String userId,
@@ -277,7 +293,6 @@ public class LoginServiceAPIFactory implements Serializable {
             }
 
             if (authResult != Authenticator.SUCCESS) {
-
                 SecurityLogger.logInfo(this.getClass(), "An invalid attempt to login as " + userId + " has been made from IP: " + request.getRemoteAddr());
                 throw new AuthException();
             }
@@ -294,6 +309,31 @@ public class LoginServiceAPIFactory implements Serializable {
 
             final HttpSession session = request.getSession();
             final User user = UserLocalManagerUtil.getUserById(userId);
+
+            if (null != user) {
+                // User must be either back-end or front-end otherwise it must be rejected.
+                if (!user.isFrontendUser() && !user.isBackendUser()) {
+                    final String errorMessage = String
+                            .format("User `%s` can not be identified neither as front-end nor back-end user ",
+                                    user.getUserId());
+                    SecurityLogger.logInfo(LoginServiceAPI.class, errorMessage);
+                    throw new AuthException(errorMessage);
+                }
+
+                // if the authentication request comes from the backend user must have console access.
+                final Object backendLogin = request.getAttribute(BACKEND_LOGIN);
+                if (null != backendLogin && BooleanUtils.toBoolean(backendLogin.toString())) {
+                    if (!user.hasConsoleAccess()) {
+                        DateUtil.sleep(2000);
+                        final String errorMessage = String
+                                .format("User `%s` / `%s` login has failed. User does not have the Back End User Role or any layouts",
+                                        user.getEmailAddress(), user.getUserId());
+                        SecurityLogger.logInfo(this.getClass(), errorMessage);
+                        //Technically this could be considered a SecurityException but in order for the error to be shown on the login screen we must throw an AuthException
+                        throw new AuthException(errorMessage);
+                    }
+                }
+            }
 
             //DOTCMS-4943
             final UserAPI userAPI = APILocator.getUserAPI();
@@ -396,14 +436,7 @@ public class LoginServiceAPIFactory implements Serializable {
         }
 
 
-        @Override
-        @CloseDBIfOpened
-        public boolean doLogin(final LoginForm form,
-                               final HttpServletRequest request,
-                               final HttpServletResponse response) throws NoSuchUserException {
 
-            return LoginServiceAPI.super.doLogin(form, request, response);
-        }
 
         @Override
         public void doRememberMe(final HttpServletRequest req,
@@ -500,12 +533,8 @@ public class LoginServiceAPIFactory implements Serializable {
         public User getLoggedInUser(HttpServletRequest req ){
             User user = null;
 
-            if(req != null) {
-                try {
-                    user = userWebAPI.getLoggedInUser(req);
-                } catch (PortalException|SystemException e) {
-                    throw new UserLoggingException( e );
-                }
+            if (req != null) {
+                user = userWebAPI.getLoggedInUser(req);
             }
             return user;
         }

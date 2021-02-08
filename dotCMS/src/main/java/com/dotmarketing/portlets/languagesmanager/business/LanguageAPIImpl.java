@@ -2,8 +2,13 @@ package com.dotmarketing.portlets.languagesmanager.business;
 
 import com.dotcms.business.CloseDBIfOpened;
 import com.dotcms.business.WrapInTransaction;
+import com.dotcms.contenttype.model.event.ContentTypeDeletedEvent;
 import com.dotcms.languagevariable.business.LanguageVariableAPI;
 import com.dotcms.rendering.velocity.util.VelocityUtil;
+import com.dotcms.system.event.local.business.LocalSystemEventsAPI;
+import com.dotcms.util.DotPreconditions;
+import com.dotmarketing.db.HibernateUtil;
+import com.dotmarketing.exception.DotHibernateException;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.dotcms.util.CollectionsUtils;
@@ -32,6 +37,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import javax.servlet.http.HttpServletRequest;
@@ -54,6 +60,7 @@ public class LanguageAPIImpl implements LanguageAPI {
 	private HttpServletRequest request; // todo: this should be decouple from the api
 	private LanguageFactory factory;
 	private LanguageVariableAPI languageVariableAPI;
+	private final LocalSystemEventsAPI localSystemEventsAPI = APILocator.getLocalSystemEventsAPI();
 	
 	/**
 	 * Inits the service with the user {@link ViewContext}
@@ -76,7 +83,17 @@ public class LanguageAPIImpl implements LanguageAPI {
 	public void deleteLanguage(final Language language) {
 
         this.factory.deleteLanguage(language);
-        Logger.debug(this, "deleteLanguage");
+        Logger.debug(this, ()-> "DeleteLanguage: " + language);
+
+		try {
+			HibernateUtil.addCommitListener(()-> {
+
+				localSystemEventsAPI.asyncNotify(new LanguageDeletedEvent(language));
+			});
+		} catch (DotHibernateException e) {
+
+			Logger.error(this, e.getMessage(), e);
+		}
 	}
 
     @Override
@@ -143,6 +160,11 @@ public class LanguageAPIImpl implements LanguageAPI {
 	@WrapInTransaction
 	@Override
 	public void saveLanguage(final Language language) {
+		DotPreconditions.checkArgument(language!=null, "Language can't be null");
+		DotPreconditions.checkArgument(UtilMethods.isSet(language.getLanguageCode()),
+				"Language Code can't be null or empty");
+		DotPreconditions.checkArgument(UtilMethods.isSet(language.getLanguage()),
+				"Language String can't be null or empty");
 
         factory.saveLanguage(language);
         Logger.debug(this, "Created language: " + language);
@@ -370,6 +392,12 @@ public class LanguageAPIImpl implements LanguageAPI {
     public Language getFallbackLanguage(final String languageCode) {
         return this.factory.getFallbackLanguage(languageCode);
     }
+
+	@CloseDBIfOpened
+	@Override
+	public Optional<Language> getFindFirstLanguageByCode(final String languageCode) {
+		return this.factory.getFindFirstLanguageByCode(languageCode);
+	}
 
 	@Override
 	@CloseDBIfOpened

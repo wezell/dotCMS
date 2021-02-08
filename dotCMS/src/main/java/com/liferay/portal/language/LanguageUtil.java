@@ -22,10 +22,16 @@
 
 package com.liferay.portal.language;
 
+import com.dotcms.repackage.org.apache.struts.Globals;
+import com.dotcms.repackage.org.apache.struts.taglib.TagUtils;
+import com.dotcms.repackage.org.apache.struts.util.MessageResources;
+import com.dotcms.util.ConversionUtils;
 import com.dotmarketing.business.APILocator;
 import com.dotmarketing.cms.factories.PublicCompanyFactory;
+import com.dotmarketing.portlets.languagesmanager.business.LanguageAPI;
 import com.dotmarketing.portlets.languagesmanager.model.Language;
 import com.dotmarketing.util.Logger;
+import com.dotmarketing.util.UtilMethods;
 import com.liferay.portal.model.Company;
 import com.liferay.portal.model.User;
 import com.liferay.portal.struts.MultiMessageResources;
@@ -36,6 +42,8 @@ import com.liferay.util.GetterUtil;
 import com.liferay.util.StringPool;
 import com.liferay.util.StringUtil;
 import com.liferay.util.Time;
+import io.vavr.Tuple;
+import io.vavr.Tuple2;
 import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.List;
@@ -47,9 +55,6 @@ import javax.servlet.http.HttpSession;
 import javax.servlet.jsp.PageContext;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.struts.Globals;
-import org.apache.struts.taglib.TagUtils;
-import org.apache.struts.util.MessageResources;
 
 /**
  * <a href="LanguageUtil.java.html"><b><i>View Source</i></b></a>
@@ -61,6 +66,70 @@ import org.apache.struts.util.MessageResources;
 public class LanguageUtil {
 
 	public static final String DEFAULT_ENCODING = "UTF-8";
+
+	/**
+	 * Returns the language id from the string representation: could be a long as a string, or could be a language code, language code + country (en, en-US, es_US)
+	 * @param languageIdORCountryCode {@link String} id or lang code or lang code + country code
+	 * @return long -1 if not possible to figure out
+	 */
+	public static long getLanguageId (final String languageIdORCountryCode) {
+
+		long languageId = -1;
+		final LanguageAPI languageAPI = APILocator.getLanguageAPI();
+		if (UtilMethods.isSet(languageIdORCountryCode)) {
+
+			languageId = ConversionUtils.toLong(languageIdORCountryCode, -1l);
+			if (-1 == languageId) {
+
+				final Tuple2<String, String> languageCountryCode =
+						getLanguageCountryCodes(languageIdORCountryCode);
+
+				if (null != languageCountryCode._1) {
+
+					Language language = languageAPI.getLanguage(languageCountryCode._1, languageCountryCode._2);
+
+					if ((null == language || language.getId() <= 0)) {
+
+						if(UtilMethods.isSet(languageCountryCode._2)) { // fallback by base lang
+
+							language = languageAPI.getFallbackLanguage(languageCountryCode._1);
+						}
+					}
+
+					if (null != language && language.getId() > 0) {
+
+						languageId = language.getId();
+					}
+				}
+			}
+		}
+
+		return languageId;
+	}
+
+	private static  Tuple2<String, String> getLanguageCountryCodes (final String languageCountryCode) {
+
+		String languageCode 		   = languageCountryCode;
+		String countryCode  		   = null;
+		String [] languageCountryCodes = null;
+
+		if (languageCountryCode.contains(StringPool.DASH)) {
+
+			languageCountryCodes = languageCountryCode.split(StringPool.DASH);
+
+		} else if (languageCountryCode.contains(StringPool.UNDERLINE)) {
+
+			languageCountryCodes = languageCountryCode.split(StringPool.UNDERLINE);
+		}
+
+		if (null != languageCountryCodes && languageCountryCodes.length >= 2) {
+
+			languageCode = languageCountryCodes[0];
+			countryCode  = languageCountryCodes[1];
+		}
+
+		return Tuple.of(languageCode, countryCode);
+	}
 
     /**
      * Returns an internationalized value for a given kay and user
@@ -99,6 +168,26 @@ public class LanguageUtil {
             throws LanguageException {
             return get(PublicCompanyFactory.getDefaultCompany(),key);
     }
+
+	/**
+	 * Get the i18n message based on the locale and the key (the message should be in the Language.properties, or the specific language file)
+	 * In addition if you have placeholders such as {0}, {1}, etc in order to interpolate arguments, you can use the arguments parameter in order to
+	 * send as much as you need.
+	 * @param key    {@link String}
+	 * @param arguments {@link Object} array
+	 * @return String
+	 * @throws LanguageException
+	 */
+	public static String get(final String key,
+							 final Object... arguments) throws LanguageException {
+
+		final String i18nMessage = get(PublicCompanyFactory.getDefaultCompany(),key);
+
+		return  (null != arguments && arguments.length > 0)?
+				MessageFormat.format(i18nMessage, arguments):
+				i18nMessage;
+	} // get
+
 	/**
 	 * Get the i18n message based on the locale and the key (the message should be in the Language.properties, or the specific language file)
 	 * In addition if you have placeholders such as {0}, {1}, etc in order to interpolate arguments, you can use the arguments parameter in order to
@@ -162,6 +251,16 @@ public class LanguageUtil {
     public static MultiMessageResources getMessagesForDefaultCompany(Locale locale, String key) {
         return (MultiMessageResources)WebAppPool.get(PublicCompanyFactory.getDefaultCompanyId(), Globals.MESSAGES_KEY);
     }
+
+	/**
+	 * This method returns a map of all the messages according the locale.
+	 *
+	 * @param locale locale to search the messages
+	 * @return
+	 */
+	public static Map getAllMessagesByLocale(final Locale locale){
+    	return MultiMessageResources.class.cast(WebAppPool.get(PublicCompanyFactory.getDefaultCompanyId(), Globals.MESSAGES_KEY)).getMessages(locale);
+	}
 
     public static Locale getDefaultCompanyLocale(){
         return PublicCompanyFactory.getDefaultCompany().getLocale();
@@ -533,7 +632,7 @@ public class LanguageUtil {
     private static class MessageResult {}
 
 	/**
-	 * Search a Httpsession's attribute named {@link Globals.LOCALE_KEY}, if it exists then return it,
+	 * Search a Httpsession's attribute named {@link Globals#LOCALE_KEY}, if it exists then return it,
 	 * if it doesn't exists then return the default user's locale and set it as a session's attribute.
 	 *
 	 * @param req

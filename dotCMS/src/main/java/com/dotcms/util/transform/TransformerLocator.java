@@ -8,20 +8,23 @@ import com.dotmarketing.beans.Tree;
 import com.dotmarketing.beans.transform.IdentifierTransformer;
 import com.dotmarketing.beans.transform.MultiTreeTransformer;
 import com.dotmarketing.beans.transform.TreeTransformer;
+import com.dotmarketing.business.ContentletVersionInfoTransformer;
 import com.dotmarketing.portlets.containers.model.Container;
 import com.dotmarketing.portlets.containers.transform.ContainerTransformer;
 import com.dotmarketing.portlets.contentlet.model.Contentlet;
 import com.dotmarketing.portlets.contentlet.transform.ContentletTransformer;
+import com.dotmarketing.portlets.contentlet.transform.FatContentletTransformer;
 import com.dotmarketing.portlets.folders.model.Folder;
-import com.dotmarketing.portlets.folders.transform.TemplateTransformer;
+import com.dotmarketing.portlets.templates.transform.TemplateTransformer;
+import com.dotmarketing.portlets.hostvariable.transform.HostVariableTransformer;
 import com.dotmarketing.portlets.languagesmanager.model.Language;
 import com.dotmarketing.portlets.languagesmanager.transform.LanguageTransformer;
 import com.dotmarketing.portlets.links.model.Link;
 import com.dotmarketing.portlets.links.transform.LinkTransformer;
 import com.dotmarketing.portlets.structure.model.Relationship;
 import com.dotmarketing.portlets.templates.model.Template;
-import com.dotmarketing.portlets.templates.transform.FolderTransformer;
-
+import com.dotmarketing.portlets.folders.transform.FolderTransformer;
+import com.dotmarketing.portlets.workflows.model.transform.WorkflowCommentTransformer;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -130,6 +133,17 @@ public class TransformerLocator {
     }
 
     /**
+     * Creates a DBTransformer for Fat Contentlet {@link com.dotmarketing.portlets.contentlet.business.Contentlet} objects
+     * @param initList List of DB results to be transformed
+     * @return
+     */
+    public static FatContentletTransformer createFatContentletTransformer(
+            List<Map<String, Object>> initList) {
+
+        return new FatContentletTransformer(initList);
+    }
+
+    /**
      * Creates a DBTransformer for MultiTree objects
      * @param initList List of DB results to be transformed
      */
@@ -190,5 +204,35 @@ public class TransformerLocator {
             List<Map<String, Object>> initList) {
 
         return new DbRelationshipTransformer(initList);
+    }
+
+    /**
+     * Creates a DBTransformer for WorkflowComment objects
+     * @param initList WorkflowComment of DB results to be transformed
+     * @return
+     */
+    public static WorkflowCommentTransformer createWorkflowCommentTransformer(List<Map<String, Object>> initList) {
+
+        return new WorkflowCommentTransformer(initList);
+    }
+
+    /**
+     * Creates a DBTransformer for HostVariable objects
+     * @param initList List of DB results to be transformed
+     * @return
+     */
+    public static HostVariableTransformer createHostVariableTransformer(List<Map<String, Object>> initList) {
+
+        return new HostVariableTransformer(initList);
+    }
+
+    /**
+     * Creates a DBTransformer for {@link com.dotmarketing.portlets.contentlet.model.ContentletVersionInfo} objects
+     * @param initList List of DB results to be transformed
+     * @return
+     */
+    public static ContentletVersionInfoTransformer createContentletVersionInfoTransformer(
+            List<Map<String, Object>> initList) {
+        return new ContentletVersionInfoTransformer(initList);
     }
 }

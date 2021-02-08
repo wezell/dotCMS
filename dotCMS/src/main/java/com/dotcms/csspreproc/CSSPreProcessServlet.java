@@ -5,16 +5,13 @@ import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Date;
 
+import java.util.Optional;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
 import com.dotcms.csspreproc.CachedCSS.ImportedAsset;
-import com.dotcms.enterprise.csspreproc.CSSCompiler;
-import com.dotcms.enterprise.csspreproc.DotLibSassCompiler;
-import com.dotcms.enterprise.csspreproc.LessCompiler;
-import com.dotcms.enterprise.csspreproc.SassCompiler;
 import com.dotcms.util.DownloadUtil;
 import com.dotmarketing.beans.Host;
 import com.dotmarketing.beans.Identifier;
@@ -35,10 +32,7 @@ import com.liferay.portal.model.User;
 public class CSSPreProcessServlet extends HttpServlet {
     private static final long serialVersionUID = -3315180323197314439L;
 
-    private final Class<? extends CSSCompiler> DEFAULT_SASS_COMPILER =  Config.getBooleanProperty("USE_LIBSASS_FOR_SASS_COMPILATION", true) ? DotLibSassCompiler.class :  SassCompiler.class;
-    
-    
-    
+
     
     @Override
     public void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
@@ -49,14 +43,11 @@ public class CSSPreProcessServlet extends HttpServlet {
             final User user = WebAPILocator.getUserWebAPI().getLoggedInUser(req);
             final String origURI=req.getRequestURI();
             //final String uri = (origURI.endsWith(".dotsass"))  ? origURI : origURI.replace("/DOTSASS", "").replace("/DOTLESS","");
-            final String fileUri = origURI.replace("/DOTSASS","").replace("/DOTLESS","");
+            final String fileUri = origURI.replace("/DOTSASS","");
 
 
-            // choose compiler based on the request URI
-            final Class<? extends CSSCompiler> compilerClass =  (origURI.startsWith("/DOTLESS/")) ? LessCompiler.class : DEFAULT_SASS_COMPILER;
             
-            
-            CSSCompiler compiler = compilerClass.getConstructor(Host.class,String.class,boolean.class).newInstance(host,fileUri,live);
+            DotLibSassCompiler compiler = new DotLibSassCompiler(host,fileUri,live);
             
             // check if the asset exists
             String actualUri =  fileUri.substring(0, fileUri.lastIndexOf('.')) + "." + compiler.getDefaultExtension();
@@ -104,54 +95,69 @@ public class CSSPreProcessServlet extends HttpServlet {
                             compiler.compile();
                         }
                         catch (Throwable ex) {
-                            Logger.error(this, "Error compiling " + host.getHostname() + ":" + fileUri, ex);
-                            if (Config.getBooleanProperty("SHOW_SASS_ERRORS_ON_FRONTEND", true)) {
-                                String err = ex.getMessage();
-                                if (err != null) {
-                                    err = err.replaceAll("io.bit3.jsass.CompilationException: ", "");
-                                    resp.getWriter().println(err);
-                                }
+                          Logger.error(this, "Error compiling " + host.getHostname() + ":" + fileUri, ex);
+                          if (Config.getBooleanProperty("SHOW_SASS_ERRORS_ON_FRONTEND", true)) {
+                            if(userHasEditPerms) {
+                              ex = (ex.getCause()!=null) ? ex.getCause() : ex;
+                              resp.getWriter().print("<html><body><h2>Error compiling sass</h2><p>(this only shows if you are an editor in dotCMS)</p><pre>");
+                              ex.printStackTrace(resp.getWriter());
+                              resp.getWriter().print("</pre></body></html>");
                             }
-                            throw new Exception(ex);
-                        }
+                          }
+                          throw new Exception(ex);
+                      }
                         
                         // build cache object
-                        ContentletVersionInfo vinfo = APILocator.getVersionableAPI().getContentletVersionInfo(ident.getId(), defLang);
+                        Optional<ContentletVersionInfo> vinfo = APILocator.getVersionableAPI()
+                                .getContentletVersionInfo(ident.getId(), defLang);
+
+                        if(!vinfo.isPresent()) {
+                            resp.sendError(404);
+                            return;
+                        }
+
                         CachedCSS newcache = new CachedCSS();
                         newcache.data = compiler.getOutput();
                         newcache.hostId = host.getIdentifier();
                         newcache.uri = actualUri;
                         newcache.live = live;
-                        newcache.modDate = vinfo.getVersionTs();
+                        newcache.modDate = vinfo.get().getVersionTs();
                         newcache.imported = new ArrayList<ImportedAsset>();
                         for(String importUri : compiler.getAllImportedURI()) {
                             // newcache entry for the imported asset
                             ImportedAsset asset = new ImportedAsset();
                             asset.uri = importUri;
-                            Identifier ii;
+                            Identifier importUriIdentifier;
                             if(importUri.startsWith("//")) {
                                 importUri=importUri.substring(2);
                                 String hn=importUri.substring(0, importUri.indexOf('/'));
                                 String uu=importUri.substring(importUri.indexOf('/'));
-                                ii = APILocator.getIdentifierAPI().find(APILocator.getHostAPI().findByName(hn, user, live),uu);
+                                importUriIdentifier = APILocator.getIdentifierAPI().find(APILocator.getHostAPI().findByName(hn, user, live),uu);
                             }
                             else {
-                                ii = APILocator.getIdentifierAPI().find(host, importUri);
+                                importUriIdentifier = APILocator.getIdentifierAPI().find(host, importUri);
                             }
-                            ContentletVersionInfo impInfo = APILocator.getVersionableAPI().getContentletVersionInfo(ii.getId(), defLang);
-                            asset.modDate = impInfo.getVersionTs();
+                            Optional<ContentletVersionInfo> impInfo = APILocator.getVersionableAPI()
+                                    .getContentletVersionInfo(importUriIdentifier.getId(), defLang);
+
+                            if(!impInfo.isPresent()) {
+                                resp.sendError(404);
+                                return;
+                            }
+
+                            asset.modDate = impInfo.get().getVersionTs();
                             newcache.imported.add(asset);
                             Logger.debug(this, host.getHostname()+":"+actualUri+" imports-> "+importUri);
                             
                             // actual cache entry for the imported asset. If needed
-                            synchronized(ii.getId().intern()) {
-                                if(CacheLocator.getCSSCache().get(ii.getHostId(), importUri, live, user)==null) {
+                            synchronized(importUriIdentifier.getId().intern()) {
+                                if(CacheLocator.getCSSCache().get(importUriIdentifier.getHostId(), importUri, live, user)==null) {
                                     CachedCSS entry = new CachedCSS();
                                     entry.data = null;
-                                    entry.hostId = ii.getHostId();
+                                    entry.hostId = importUriIdentifier.getHostId();
                                     entry.imported = new ArrayList<ImportedAsset>();
                                     entry.live = live;
-                                    entry.modDate = impInfo.getVersionTs();
+                                    entry.modDate = impInfo.get().getVersionTs();
                                     entry.uri = importUri;
                                     CacheLocator.getCSSCache().add(entry);
                                 }

@@ -106,18 +106,7 @@ public class PageLoader implements DotLoader {
             }
         }
 
-        /**
-         * Serializes the page variables and pointers to 
-         * the content (multitree ebtries)
-         * in the page velocity template
-         */
-        if (mode == PageMode.LIVE) {
-          final PageRenderUtil pce = new PageRenderUtil(htmlPage, sys, mode);
-          sb.append(pce.getWidgetPreExecute());
-          sb.append(pce.asString());
-        }
-      
-
+        addWidgetPreExecuteCodeAndPageInfo((HTMLPageAsset) htmlPage, mode, sb, sys);
 
         sb.append("#set($dotPageContent = $dotcontent.find(\"" + htmlPage.getInode() + "\" ))");
 
@@ -191,13 +180,19 @@ public class PageLoader implements DotLoader {
         }
         sb.append("#end");
 
-        sb.append("#if($hasForm)");
-        sb.append("#parse (\"/static/content/init_form_macro.vtl\")");
-        sb.append("#end");
 
         return writeOutVelocity(filePath, sb.toString());
 
 
+    }
+
+    private void addWidgetPreExecuteCodeAndPageInfo(final HTMLPageAsset htmlPage, final PageMode mode,
+            final StringBuilder stringBuilder, final User user) throws DotSecurityException, DotDataException {
+        final PageRenderUtil pce = new PageRenderUtil(htmlPage, user, mode);
+        // Add the pre-execute code of a widget to the page
+        stringBuilder.append(pce.getWidgetPreExecute());
+        // Adds the page info
+        stringBuilder.append(pce.asString());
     }
 
 

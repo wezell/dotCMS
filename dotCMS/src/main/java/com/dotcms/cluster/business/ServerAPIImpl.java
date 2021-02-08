@@ -5,6 +5,7 @@ import java.io.File;
 import java.io.FileFilter;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.lang.management.ManagementFactory;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.nio.file.Files;
@@ -16,7 +17,6 @@ import com.dotcms.business.CloseDBIfOpened;
 import com.dotcms.business.WrapInTransaction;
 import com.dotcms.cluster.bean.Server;
 import com.dotcms.cluster.bean.ServerPort;
-import com.dotcms.content.elasticsearch.util.ESClient;
 import com.dotcms.enterprise.cluster.ClusterFactory;
 import com.dotmarketing.business.APILocator;
 import com.dotmarketing.business.DotStateException;
@@ -84,9 +84,6 @@ public class ServerAPIImpl implements ServerAPI {
         String port = ClusterFactory.getNextAvailablePort(readServerId(), ServerPort.CACHE_PORT);
         Config.setProperty(ServerPort.CACHE_PORT.getPropertyName(), port);
         serverBuilder.withCachePort(Integer.parseInt(port));
-
-        port = new ESClient().getNextAvailableESPort(readServerId(), ipAddress, null, null);
-        serverBuilder.withEsTransportTcpPort(Integer.parseInt(port));
 
         port = ClusterFactory.getNextAvailablePort(readServerId(), ServerPort.ES_HTTP_PORT);
         serverBuilder.withEsHttpPort(Integer.parseInt(port));
@@ -280,5 +277,15 @@ public class ServerAPIImpl implements ServerAPI {
     public Server getCurrentServer() throws DotDataException {
 
         return getOrCreateMyServer();
+    }
+
+    /**
+     * Gets the servers start time
+     *
+     * @return milliseconds representing the date-time when the server started.
+     */
+    @Override
+    public long getServerStartTime() {
+        return ManagementFactory.getRuntimeMXBean().getStartTime();
     }
 }

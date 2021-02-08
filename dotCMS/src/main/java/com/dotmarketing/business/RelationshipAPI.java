@@ -47,6 +47,15 @@ public interface RelationshipAPI {
 
   List<Relationship> byContentType(ContentTypeIf type, String orderBy);
 
+    /**
+     * Gets related content from database, given a parent/child content and a relationship object. <p>
+     * In case of a self-join relationship, the resulting list will contain a merged list where the provided
+     * content exists as a parent or as a child on that relationship
+     * @param relationship
+     * @param contentlet
+     * @return
+     * @throws DotDataException
+     */
   List<Contentlet> dbRelatedContent(Relationship relationship, Contentlet contentlet)
           throws DotDataException;
 
@@ -89,11 +98,29 @@ public interface RelationshipAPI {
 
   boolean sameParentAndChild(Relationship rel);
 
+    /**
+     * @deprecated For relationship fields use {@link RelationshipAPI#isParentField(Relationship, com.dotcms.contenttype.model.field.Field)} instead
+     * @param rel
+     * @param st
+     * @return
+     */
+    @Deprecated
   boolean isChild(Relationship rel, ContentTypeIf st);
+
+  boolean isParentField(Relationship rel, com.dotcms.contenttype.model.field.Field field);
 
   int maxSortOrder(String parentInode, String relationType);
 
+    /**
+     * @deprecated For relationship fields use {@link RelationshipAPI#isChildField(Relationship, com.dotcms.contenttype.model.field.Field)} instead
+     * @param rel
+     * @param st
+     * @return
+     */
+    @Deprecated
   boolean isParent(Relationship rel, ContentTypeIf st);
+
+  boolean isChildField(Relationship rel, com.dotcms.contenttype.model.field.Field field);
 
   void delete(Relationship relationship) throws DotDataException;
 

@@ -15,6 +15,7 @@
 <%@ page import="com.dotmarketing.util.InodeUtils" %>
 <%@ page import="com.dotmarketing.util.Logger" %>
 <%@ page import="com.dotmarketing.util.PortletID" %>
+<%@ page import="com.dotcms.contenttype.exception.NotFoundInDbException" %>
 
 <iframe id="AjaxActionJackson" name="AjaxActionJackson" style="border:0; width:0; height:0;"></iframe>
 <%
@@ -48,16 +49,40 @@
     boolean filterLocked = false;
     boolean filterUnpublish = false;
     int currpage = 1;
-    String orderBy = "modDate desc";
+    String orderBy = "score,modDate desc";
     Language defaultLang = APILocator.getLanguageAPI().getDefaultLanguage();
     String languageId = String.valueOf(defaultLang.getId());
     if(session.getAttribute(com.dotmarketing.util.WebKeys.LANGUAGE_SEARCHED)!= null){
         languageId = (String)session.getAttribute(com.dotmarketing.util.WebKeys.LANGUAGE_SEARCHED);
     }
 
-    String structureSelected = (String) request.getAttribute("selectedStructure");
+    String structureSelected = null;
+    final String variableName = (String) request.getParameter("filter");
 
-
+    if(UtilMethods.isSet(variableName)){
+        if (com.dotmarketing.beans.Host.HOST_VELOCITY_VAR_NAME.equals(variableName)){
+            structureSelected = null;
+        }else{
+            try {
+                ContentType filterContentType = APILocator.getContentTypeAPI(user).find(variableName);
+                structureSelected = filterContentType != null ? filterContentType.id() : null;
+            } catch (NotFoundInDbException e) {
+                structureSelected = null;
+            }
+        }
+    }else{
+        structureSelected = (String) request.getAttribute("selectedStructure");
+        if (structureSelected != null){
+            try {
+                ContentType contentType = APILocator.getContentTypeAPI(user).find(structureSelected);
+                if (contentType != null && com.dotmarketing.beans.Host.HOST_VELOCITY_VAR_NAME.equals(contentType.variable()) ){
+                    structureSelected = null;
+                }
+            } catch (NotFoundInDbException e) {
+                structureSelected = null;
+            }
+        }
+    }
 
     String schemeSelected = "catchall";
     if(UtilMethods.isSet(session.getAttribute(ESMappingConstants.WORKFLOW_SCHEME))){
@@ -164,7 +189,8 @@
             LanguageUtil.get(pageContext, "HTMLPage"),
             LanguageUtil.get(pageContext, "Persona"),
             LanguageUtil.get(pageContext, "VanityURL"),
-            LanguageUtil.get(pageContext, "KeyValue")
+            LanguageUtil.get(pageContext, "KeyValue"),
+            LanguageUtil.get(pageContext, "DotAsset")
             ,
     };
 
@@ -227,6 +253,8 @@
                                                         ? "<span class='vanityIcon'></span>"
                                                             : (contentType.getStructureType()==8)
                                                             ? "<span class='languageVarIcon'></span>"
+                                                              : (contentType.getStructureType()==9)
+                                                              ? "<span class='dotAssetIcon'></span>"
                                                                 :"<span class='blankIcon'></span>";
 
                     String contentTypeName= UtilMethods.javaScriptify(contentType.getName());
@@ -305,7 +333,7 @@
 
                  for (let i=0; i<data.contentlets.length;++i) {
                      let entity = data.contentlets[i];
-                     dataItems.items[i] = { label: entity.title, id: entity.identifier, searchMe : entity.title + " " + entity.identifier + " " + entity.inode };
+                     dataItems.items[i] = { label: entity.title, id: (entity.identifier + " " + entity.inode), searchMe : entity.title + " " + entity.identifier + " " + entity.inode };
                  }
                  
                  dojoRelationshipsStore = new dojo.data.ItemFileReadStore({
@@ -458,7 +486,7 @@
                     fsSteps.set('value', 'catchall');
                     reloadSchemeStoreFromStructureInode(fsSchemes);
                     structureChanged(true);
-                    doSearch(null, "<%=orderBy%>");
+                    doSearch(1, "<%=orderBy%>");
                 }
             },
             dojo.byId("structSelectBox"));
@@ -478,7 +506,7 @@
                     fsSteps.set('value', 'catchall');
                     reloadStepStoreFromSchemeId (fsSteps)
                     structureChanged(true);
-                    doSearch(null, "<%=orderBy%>");
+                    doSearch(1, "<%=orderBy%>");
                 }
             },
             dojo.byId("schemeSelectBox"));
@@ -497,7 +525,7 @@
 
                     // todo: recargar con step_id
                     structureChanged(true);
-                    doSearch(null, "<%=orderBy%>");
+                    doSearch(1, "<%=orderBy%>");
                 }
             },
             dojo.byId("stepSelectBox"));
@@ -561,8 +589,8 @@
 
 <%@ include file="/html/portlet/ext/contentlet/view_bulk_actions_inc.jsp" %>
 
-
-<form method="Post" action="" id="search_form" onsubmit="doSearch();return false;">
+<dot-asset-drop-zone>
+    <form method="Post" action="" id="search_form" onsubmit="doSearch();return false;">
 
     <input type="hidden" name="fullCommand" id="fullCommand" value="">
     <input type="hidden" name="expiredInodes" id="expiredInodes" value=""/>
@@ -576,7 +604,7 @@
     <input type="hidden" name="filterLocked" id="filterLocked" value="<%= filterLocked %>">
     <input type="hidden" name="filterUnpublish" id="filterUnpublish" value="<%= filterUnpublish %>">
     <input type="hidden" name="currentPage" id="currentPage" value="">
-    <input type="hidden" name="currentSortBy" id="currentSortBy" value="modDate desc">
+    <input type="hidden" name="currentSortBy" id="currentSortBy" value="score,modDate desc">
     <input type="hidden" value="" name="lastModDateFrom"  id="lastModDateFrom" size="10" maxlength="10" readonly="true"/>
     <input type="hidden" value="" name="lastModDateTo"  id="lastModDateTo" size="10" maxlength="10" readonly="true"/>
     <input type="hidden" name="structureVelocityVarNames" id="structureVelocityVarNames" value="<%= structureVelocityVarNames %>">
@@ -586,6 +614,7 @@
     <input type="hidden" value="" name="Identifier" id="Identifier" size="10"/>
     <input type="hidden" value="" name="allSearchedContentsInodes" id="allSearchedContentsInodes" dojoType="dijit.form.TextBox"/>
     <input type="hidden" value="" name="allUncheckedContentsInodes" id="allUncheckedContentsInodes" dojoType="dijit.form.TextBox"/>
+
     <!-- START Split Screen -->
     <div dojoType="dijit.layout.BorderContainer" design="sidebar" gutters="false" liveSplitters="true" id="borderContainer">
 
@@ -699,7 +728,7 @@
 
                     <dl class="vertical">
                         <dd>
-                            <button dojoType="dijit.form.Button" id="clearButton" onClick="clearSearch();doSearch();" iconClass="resetIcon" class="dijitButtonFlat">
+                            <button dojoType="dijit.form.Button" id="clearButton" onClick="clearSearch();" iconClass="resetIcon" class="dijitButtonFlat">
                                 <%= UtilMethods.escapeSingleQuotes(LanguageUtil.get(pageContext, "Clear")) %>
                             </button>
                         </dd>
@@ -709,7 +738,7 @@
 
                 <a href="javascript:toggleAdvancedSearchDiv()" class="advanced-search-button">
                     <div id="toggleDivText">
-                        <%= LanguageUtil.get(pageContext, "Advanced") %>
+                        <%= LanguageUtil.get(pageContext, "advanced") %>
                     </div>
                 </a>
 
@@ -726,7 +755,7 @@
                     <!-- START Listing Results -->
                     <input type="hidden" name="referer" value="<%=referer%>">
                     <input type="hidden" name="cmd" value="prepublish">
-                    <div class="portlet-toolbar">
+                    <div class="portlet-toolbar" style="height: 48px">
                         <div class="portlet-toolbar__actions-secondary">
                             <button id="bulkAvailableActions" dojoType="dijit.form.Button" data-dojo-props="onClick: doShowAvailableActions" iconClass="actionIcon" >
                                 <%= LanguageUtil.get(pageContext, "Available-actions")%>
@@ -751,7 +780,10 @@
                         </div>
 
                     </div>
+
+
                     <table id="results_table" class="listingTable content-search__results-list"></table>
+
                     <div id="results_table_popup_menus"></div>
                     <!-- END Listing Results -->
                 </div>
@@ -802,6 +834,14 @@
     </div>
 
 </form>
+</dot-asset-drop-zone>
+    <script>
+        var dotAssetDropZone = document.querySelector('dot-asset-drop-zone');
+        dotAssetDropZone.addEventListener('uploadComplete', function() {
+            doSearch();
+        });
+    </script>
+
 
 <div class="messageZone" id="messageZone" style="display: none;">
     <i class="loadingIcon"></i>

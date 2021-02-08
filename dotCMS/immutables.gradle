@@ -1,6 +1,6 @@
 buildscript {
     repositories {
-        maven { url "http://repo.dotcms.com/artifactory/libs-release" }
+        maven { url "https://repo.dotcms.com/artifactory/libs-release" }
         jcenter()
     }
     dependencies {
@@ -40,15 +40,11 @@ apply plugin: 'war'
 
 // In this section you declare where to find the dependencies of your project.
 repositories {
-    maven { url "http://repo.dotcms.com/artifactory/libs-release" }
-    maven { url "http://repo.dotcms.com/artifactory/libs-snapshot-local" }
+    maven { url "https://repo.dotcms.com/artifactory/libs-release" }
+    maven { url "https://repo.dotcms.com/artifactory/libs-snapshot-local" }
 }
 
 dependencies {
-
-    providedCompile "javax.servlet:javax.servlet-api:3.1.0"
-    providedCompile fileTree("../libs/buildlibs").include('**/*.jar')
-    providedCompile fileTree("../libs/buildlibs").include('mail.jar', 'mysql-conn*.jar', 'ojdbc*.jar', 'postgres*.jar', 'mssql-jdbc*.jar')
 
     if (project.gradle.startParameter.taskNames.contains('deployWarTomcatDev')) {
         configurations.compile.exclude group: 'com.dotcms.enterprise', module: 'ee'

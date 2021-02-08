@@ -8,13 +8,13 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.dotcms.IntegrationTestBase;
 import com.dotcms.contenttype.business.ContentTypeAPI;
 import com.dotcms.contenttype.business.FieldAPI;
+import com.dotcms.contenttype.model.field.CategoryField;
 import com.dotcms.contenttype.model.field.DataTypes;
 import com.dotcms.contenttype.model.field.Field;
 import com.dotcms.contenttype.model.field.FieldBuilder;
@@ -23,21 +23,31 @@ import com.dotcms.contenttype.model.field.RelationshipField;
 import com.dotcms.contenttype.model.field.TextField;
 import com.dotcms.contenttype.model.type.BaseContentType;
 import com.dotcms.contenttype.model.type.ContentType;
+import com.dotcms.datagen.CategoryDataGen;
+import com.dotcms.datagen.CompanyDataGen;
+import com.dotcms.datagen.ContentTypeDataGen;
 import com.dotcms.datagen.ContentletDataGen;
+import com.dotcms.datagen.FieldDataGen;
 import com.dotcms.datagen.RoleDataGen;
+import com.dotcms.datagen.SiteDataGen;
 import com.dotcms.datagen.TestUserUtils;
 import com.dotcms.datagen.TestWorkflowUtils;
+import com.dotcms.datagen.UserDataGen;
 import com.dotcms.datagen.WorkflowDataGen;
 import com.dotcms.mock.request.MockAttributeRequest;
 import com.dotcms.mock.request.MockHeaderRequest;
 import com.dotcms.mock.request.MockHttpRequest;
 import com.dotcms.mock.request.MockSessionRequest;
+import com.dotcms.mock.response.BaseResponse;
+import com.dotcms.mock.response.MockHttpResponse;
 import com.dotcms.repackage.org.codehaus.jettison.json.JSONArray;
 import com.dotcms.repackage.org.codehaus.jettison.json.JSONException;
 import com.dotcms.repackage.org.codehaus.jettison.json.JSONObject;
 import com.dotcms.rest.ContentResource;
+import com.dotcms.rest.RESTParams;
 import com.dotcms.util.CollectionsUtils;
 import com.dotcms.util.IntegrationTestInitService;
+import com.dotmarketing.beans.Host;
 import com.dotmarketing.beans.Permission;
 import com.dotmarketing.business.APILocator;
 import com.dotmarketing.business.PermissionAPI;
@@ -47,25 +57,34 @@ import com.dotmarketing.business.RoleAPI;
 import com.dotmarketing.business.UserAPI;
 import com.dotmarketing.exception.DotDataException;
 import com.dotmarketing.exception.DotSecurityException;
+import com.dotmarketing.portlets.categories.model.Category;
 import com.dotmarketing.portlets.contentlet.business.ContentletAPI;
 import com.dotmarketing.portlets.contentlet.model.Contentlet;
 import com.dotmarketing.portlets.languagesmanager.business.LanguageAPI;
 import com.dotmarketing.portlets.structure.model.Relationship;
 import com.dotmarketing.portlets.workflows.business.WorkflowAPI;
 import com.dotmarketing.portlets.workflows.model.WorkflowScheme;
+import com.dotmarketing.util.UUIDGenerator;
+import com.dotmarketing.util.UtilMethods;
 import com.dotmarketing.util.WebKeys.Relationship.RELATIONSHIP_CARDINALITY;
 import com.google.common.collect.Sets;
+import com.liferay.portal.model.Company;
 import com.liferay.portal.model.User;
+import com.liferay.portal.util.WebKeys;
 import com.liferay.util.StringPool;
 import com.tngtech.java.junit.dataprovider.DataProvider;
 import com.tngtech.java.junit.dataprovider.DataProviderRunner;
 import com.tngtech.java.junit.dataprovider.UseDataProvider;
+import io.vavr.Tuple2;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -83,6 +102,10 @@ import javax.ws.rs.core.Response.Status;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
+import javax.xml.xpath.XPath;
+import javax.xml.xpath.XPathConstants;
+import javax.xml.xpath.XPathExpressionException;
+import javax.xml.xpath.XPathFactory;
 import org.apache.xerces.dom.DeferredElementImpl;
 import org.glassfish.jersey.internal.util.Base64;
 import org.junit.AfterClass;
@@ -90,6 +113,7 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.w3c.dom.Document;
+import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
 import org.xml.sax.InputSource;
 import org.xml.sax.SAXException;
@@ -114,8 +138,10 @@ public class ContentResourceTest extends IntegrationTestBase {
     private static RelationshipAPI relationshipAPI;
     private static RoleAPI roleAPI;
     private static User user;
+    private static User adminUser;
     private static UserAPI userAPI;
     private static Role adminRole;
+    private static Host host;
 
     static private WorkflowScheme testScheme;
 
@@ -144,6 +170,10 @@ public class ContentResourceTest extends IntegrationTestBase {
         if (adminRole == null) {
             adminRole = new RoleDataGen().key(ADMINISTRATOR).nextPersisted();
         }
+
+        // Test host
+        host = new SiteDataGen().nextPersisted();
+        adminUser = TestUserUtils.getAdminUser();
     }
 
     @AfterClass
@@ -158,13 +188,24 @@ public class ContentResourceTest extends IntegrationTestBase {
         String depth;
         String responseType;
         boolean limitedUser;
+        boolean testSelfRelated;
         int statusCode;
 
-        public TestCase(final String depth, final String responseType, final int statusCode, final boolean limitedUser) {
-            this.depth        = depth;
+        public TestCase(final String depth, final String responseType, final int statusCode,
+                final boolean limitedUser, final boolean testSelfRelated) {
+            this.depth = depth;
             this.responseType = responseType;
-            this.statusCode   = statusCode;
-            this.limitedUser  = limitedUser;
+            this.statusCode = statusCode;
+            this.limitedUser = limitedUser;
+            this.testSelfRelated = testSelfRelated;
+        }
+    }
+
+    public static class PullSelfRelatedTestCase {
+        String responseType;
+
+        public PullSelfRelatedTestCase(final String responseType) {
+            this.responseType = responseType;
         }
     }
 
@@ -184,25 +225,45 @@ public class ContentResourceTest extends IntegrationTestBase {
     @DataProvider
     public static Object[] testCases(){
         return new TestCase[]{
-                new TestCase(null, JSON_RESPONSE, Status.OK.getStatusCode(), false),
-                new TestCase("0", JSON_RESPONSE, Status.OK.getStatusCode(), false),
-                new TestCase("1", JSON_RESPONSE, Status.OK.getStatusCode(), false),
-                new TestCase("2", JSON_RESPONSE, Status.OK.getStatusCode(), false),
-                new TestCase("3", JSON_RESPONSE, Status.OK.getStatusCode(), false),
-                new TestCase(null, XML_RESPONSE, Status.OK.getStatusCode(), false),
-                new TestCase("0", XML_RESPONSE, Status.OK.getStatusCode(), false),
-                new TestCase("1", XML_RESPONSE, Status.OK.getStatusCode(), false),
-                new TestCase("2", XML_RESPONSE, Status.OK.getStatusCode(), false),
-                new TestCase("3", XML_RESPONSE, Status.OK.getStatusCode(), false),
-                new TestCase(null, null, Status.OK.getStatusCode(), false),
+                new TestCase(null, JSON_RESPONSE, Status.OK.getStatusCode(), false, false),
+                new TestCase("0", JSON_RESPONSE, Status.OK.getStatusCode(), false, false),
+                new TestCase("1", JSON_RESPONSE, Status.OK.getStatusCode(), false, false),
+                new TestCase("2", JSON_RESPONSE, Status.OK.getStatusCode(), false, false),
+                new TestCase("3", JSON_RESPONSE, Status.OK.getStatusCode(), false, false),
+                new TestCase(null, XML_RESPONSE, Status.OK.getStatusCode(), false, false),
+                new TestCase("0", XML_RESPONSE, Status.OK.getStatusCode(), false, false),
+                new TestCase("1", XML_RESPONSE, Status.OK.getStatusCode(), false, false),
+                new TestCase("2", XML_RESPONSE, Status.OK.getStatusCode(), false, false),
+                new TestCase("3", XML_RESPONSE, Status.OK.getStatusCode(), false, false),
+                new TestCase(null, null, Status.OK.getStatusCode(), false, false),
                 //Bad depth cases
-                new TestCase("5", JSON_RESPONSE, Status.BAD_REQUEST.getStatusCode(), false),
-                new TestCase("5", XML_RESPONSE, Status.BAD_REQUEST.getStatusCode(), false),
-                new TestCase("no_depth", JSON_RESPONSE, Status.BAD_REQUEST.getStatusCode(), false),
-                new TestCase("no_depth", XML_RESPONSE, Status.BAD_REQUEST.getStatusCode(), false),
+                new TestCase("5", JSON_RESPONSE, Status.BAD_REQUEST.getStatusCode(), false, false),
+                new TestCase("5", XML_RESPONSE, Status.BAD_REQUEST.getStatusCode(), false, false),
+                new TestCase("no_depth", JSON_RESPONSE, Status.BAD_REQUEST.getStatusCode(), false, false),
+                new TestCase("no_depth", XML_RESPONSE, Status.BAD_REQUEST.getStatusCode(), false, false),
 
-                new TestCase("0", JSON_RESPONSE, Status.OK.getStatusCode(), true),
-                new TestCase("0", XML_RESPONSE, Status.OK.getStatusCode(), true)
+                new TestCase("0", JSON_RESPONSE, Status.OK.getStatusCode(), true, false),
+                new TestCase("0", XML_RESPONSE, Status.OK.getStatusCode(), true, false),
+
+                new TestCase(null, JSON_RESPONSE, Status.OK.getStatusCode(), false, true),
+                new TestCase("0", JSON_RESPONSE, Status.OK.getStatusCode(), false, true),
+                new TestCase("1", JSON_RESPONSE, Status.OK.getStatusCode(), false, true),
+                new TestCase("2", JSON_RESPONSE, Status.OK.getStatusCode(), false, true),
+                new TestCase("3", JSON_RESPONSE, Status.OK.getStatusCode(), false, true),
+                new TestCase(null, XML_RESPONSE, Status.OK.getStatusCode(), false, true),
+                new TestCase("0", XML_RESPONSE, Status.OK.getStatusCode(), false, true),
+                new TestCase("1", XML_RESPONSE, Status.OK.getStatusCode(), false, true),
+                new TestCase("2", XML_RESPONSE, Status.OK.getStatusCode(), false, true),
+                new TestCase("3", XML_RESPONSE, Status.OK.getStatusCode(), false, true),
+                new TestCase(null, null, Status.OK.getStatusCode(), false, true),
+                //Bad depth cases
+                new TestCase("5", JSON_RESPONSE, Status.BAD_REQUEST.getStatusCode(), false, true),
+                new TestCase("5", XML_RESPONSE, Status.BAD_REQUEST.getStatusCode(), false, true),
+                new TestCase("no_depth", JSON_RESPONSE, Status.BAD_REQUEST.getStatusCode(), false, true),
+                new TestCase("no_depth", XML_RESPONSE, Status.BAD_REQUEST.getStatusCode(), false, true),
+
+                new TestCase("0", JSON_RESPONSE, Status.OK.getStatusCode(), true, true),
+                new TestCase("0", XML_RESPONSE, Status.OK.getStatusCode(), true, true)
         };
     }
 
@@ -214,6 +275,21 @@ public class ContentResourceTest extends IntegrationTestBase {
                 new PullRelatedTestCase(true, false, true),
                 new PullRelatedTestCase(true, false, false),
                 new PullRelatedTestCase(true, true, true)
+        };
+    }
+
+    @DataProvider
+    public static Object[] selfRelatedTestCases(){
+        return new PullSelfRelatedTestCase[]{
+                new PullSelfRelatedTestCase(JSON_RESPONSE),
+                new PullSelfRelatedTestCase(XML_RESPONSE)
+        };
+    }
+
+    @DataProvider
+    public static Object[] categoryTestCases() {
+        return new String[] {
+                JSON_RESPONSE, XML_RESPONSE
         };
     }
 
@@ -288,11 +364,122 @@ public class ContentResourceTest extends IntegrationTestBase {
     }
 
     @Test
+    @UseDataProvider("selfRelatedTestCases")
+    public void test_getContentWithMultipleSelfRelated_shouldReturnRelationships(final PullSelfRelatedTestCase testCase)
+            throws Exception {
+
+        final long language = languageAPI.getDefaultLanguage().getId();
+        final ContentType contentType = createSampleContentType(false);
+
+        //creates relationship fields
+        final Field field1 = createRelationshipField("relationship1", contentType,
+                contentType.variable(), RELATIONSHIP_CARDINALITY.ONE_TO_MANY.ordinal());
+
+        final Relationship relationship1 = relationshipAPI.getRelationshipFromField(field1, user);
+
+        final Field field2 = createRelationshipField("relationship2", contentType,
+                contentType.variable(), RELATIONSHIP_CARDINALITY.ONE_TO_MANY.ordinal());
+
+        final Relationship relationship2 = relationshipAPI.getRelationshipFromField(field2, user);
+
+
+        //creates contentlets
+        final ContentletDataGen contentletDataGen = new ContentletDataGen(contentType.id());
+        final Contentlet child1 = contentletDataGen.languageId(language).nextPersisted();
+        final Contentlet child2 = contentletDataGen.languageId(language).nextPersisted();
+        final Contentlet child3 = contentletDataGen.languageId(language).nextPersisted();
+
+        Contentlet parent = contentletDataGen.languageId(language).next();
+        parent = contentletAPI.checkin(parent,
+                CollectionsUtils.map(relationship1, CollectionsUtils.list(child1), relationship2,
+                        CollectionsUtils.list(child2, child3)), user, false);
+
+        final ContentResource contentResource = new ContentResource();
+        final HttpServletRequest request = createHttpRequest(null, null);
+        final HttpServletResponse response = mock(HttpServletResponse.class);
+        final Response endpointResponse = contentResource.getContent(request, response,
+                "/id/" + parent.getIdentifier() + "/live/false/type/" + testCase.responseType
+                        + "/depth/0");
+
+        assertEquals(200, endpointResponse.getStatus());
+
+        //validates results
+        if (testCase.responseType.equals(JSON_RESPONSE)) {
+            final JSONObject json = new JSONObject(endpointResponse.getEntity().toString());
+            final JSONArray contentlets = json.getJSONArray("contentlets");
+            final JSONObject contentlet = (JSONObject) contentlets.get(0);
+
+            //Validate parent identifier
+            assertEquals(parent.getIdentifier(), contentlet.get(IDENTIFIER));
+
+            //Validate child of the first relationship
+            JSONArray jsonArray = (JSONArray) contentlet.get(field1.variable());
+            assertEquals(1, jsonArray.length());
+            assertEquals(child1.getIdentifier(), jsonArray.get(0));
+
+            //Validate children of the second relationship
+            jsonArray = (JSONArray) contentlet.get(field2.variable());
+            assertEquals(2, jsonArray.length());
+            assertEquals(child2.getIdentifier(), jsonArray.get(0));
+            assertEquals(child3.getIdentifier(), jsonArray.get(1));
+
+        }else{
+
+            final DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+            final DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
+
+            final InputSource inputSource = new InputSource();
+            inputSource.setCharacterStream(
+                    new StringReader(endpointResponse.getEntity().toString().replaceAll("\\n", "")));
+            final Document doc = dBuilder.parse(inputSource);
+            doc.getDocumentElement().normalize();
+
+            final DeferredElementImpl contentlet = (DeferredElementImpl) doc.getFirstChild().getFirstChild();
+
+            //Validate parent identifier
+            assertEquals(parent.getInode(), contentlet.getElementsByTagName("inode").item(0).getTextContent());
+
+            //Validate child of the first relationship
+            NodeList items = ((DeferredElementImpl) (contentlet).getElementsByTagName(field1.variable()).item(0));
+
+            int j= 0;
+            for (int i=0;i<items.getLength();i++){
+                String textContent = items.item(i).getTextContent();
+                if (textContent !=null && !textContent.trim().isEmpty()) {
+                    assertEquals(child1.getIdentifier(), textContent);
+                    j++;
+                }
+            }
+
+            assertEquals(1, j);
+
+            //Validate children of the second relationship
+            items = ((DeferredElementImpl) (contentlet).getElementsByTagName(field2.variable()).item(0));
+
+            j= 0;
+            for (int i=0;i<items.getLength();i++){
+                String textContent = items.item(i).getTextContent();
+                if (textContent !=null && !textContent.trim().isEmpty()) {
+                    if (j == 0) {
+                        assertEquals(child2.getIdentifier(), textContent);
+                    } else{
+                        assertEquals(child3.getIdentifier(), textContent);
+                    }
+                    j++;
+                }
+            }
+
+            assertEquals(2, j);
+        }
+    }
+
+    @Test
     @UseDataProvider("testCases")
     public void test_getContent_shouldReturnRelationships(final TestCase testCase)
             throws Exception {
 
         final long language = languageAPI.getDefaultLanguage().getId();
+        final Map<String, Contentlet> contentlets = new HashMap();
 
         ContentType parentContentType = null;
         ContentType childContentType  = null;
@@ -306,7 +493,7 @@ public class ContentResourceTest extends IntegrationTestBase {
             //creates content types
             parentContentType = createSampleContentType(false);
             childContentType = createSampleContentType(false);
-            grandChildContentType = createSampleContentType(false);
+            grandChildContentType = testCase.testSelfRelated? childContentType: createSampleContentType(false);
 
             //creates relationship fields
             final Field parentField = createRelationshipField("children", parentContentType,
@@ -323,7 +510,7 @@ public class ContentResourceTest extends IntegrationTestBase {
                     RELATIONSHIP_CARDINALITY.ONE_TO_ONE.ordinal());
 
             //creates the other side of the child relationship
-            createRelationshipField("parents",
+            final Field otherSideChildField = createRelationshipField(testCase.testSelfRelated? "siblings": "parents",
                     grandChildContentType,
                     childContentType.variable() + StringPool.PERIOD + childField.variable(),
                     RELATIONSHIP_CARDINALITY.MANY_TO_MANY.ordinal());
@@ -343,17 +530,37 @@ public class ContentResourceTest extends IntegrationTestBase {
             final ContentletDataGen childDataGen = new ContentletDataGen(childContentType.id());
             Contentlet child = childDataGen.languageId(language).next();
 
-            child = contentletAPI.checkin(child, CollectionsUtils
-                            .map(childRelationship, CollectionsUtils.list(grandChild1, grandChild2)), user,
-                    false);
+            child.setRelated(childField.variable(), CollectionsUtils.list(grandChild1, grandChild2));
+
+            if (testCase.testSelfRelated){
+                final Contentlet sibling = childDataGen.languageId(language).nextPersisted();
+                child.setRelated(otherSideChildField, CollectionsUtils.list(sibling));
+                contentlets.put("sibling", sibling);
+            }
+
+            child = contentletAPI.checkin(child, user, false);
+
             if (testCase.limitedUser){
                 newRole = createRole();
 
-                createdLimitedUser = TestUserUtils
-                        .getUser(newRole, "email" + System.currentTimeMillis() + "@dotcms.com",
-                                "name" + System.currentTimeMillis(),
-                                "lastName" + System.currentTimeMillis(),
-                                "password" + System.currentTimeMillis());
+                final Company company = new CompanyDataGen()
+                        .name("TestCompany")
+                        .shortName("TC")
+                        .authType("email")
+                        .autoLogin(true)
+                        .emailAddress("lol@dotCMS.com")
+                        .homeURL("localhost")
+                        .city("NYC")
+                        .mx("MX")
+                        .type("test")
+                        .phone("5552368")
+                        .portalURL("/portalURL")
+                        .nextPersisted();
+
+                createdLimitedUser =
+                    new UserDataGen().firstName("name").lastName("lastName").companyId(company.getCompanyId())
+                        .emailAddress("email" + System.currentTimeMillis() + "@dotcms.com").skinId(UUIDGenerator.generateUuid())
+                        .password("password" + System.currentTimeMillis()).roles(newRole, TestUserUtils.getFrontendRole(), TestUserUtils.getBackendRole()).nextPersisted();
 
                 //set individual permissions to the child
                 permissionAPI.save(new Permission(PermissionAPI.INDIVIDUAL_PERMISSION_TYPE,
@@ -375,18 +582,16 @@ public class ContentResourceTest extends IntegrationTestBase {
                         true), parent, user, false);
             }
 
-            final Map<String, Contentlet> contentlets = new HashMap();
+
             contentlets.put("parent", parent);
             contentlets.put("child", child);
             contentlets.put("grandChild1", grandChild1);
             contentlets.put("grandChild2", grandChild2);
 
             //calls endpoint
-            Thread.sleep(10000);
-
             final ContentResource contentResource = new ContentResource();
             final HttpServletRequest request = createHttpRequest(null,
-                    testCase.limitedUser ? createdLimitedUser : null);
+                    testCase.limitedUser ? createdLimitedUser : adminUser);
             final HttpServletResponse response = mock(HttpServletResponse.class);
             final Response endpointResponse = contentResource.getContent(request, response,
                     "/id/" + parent.getIdentifier() + "/live/false/type/" + testCase.responseType
@@ -405,8 +610,14 @@ public class ContentResourceTest extends IntegrationTestBase {
             }
 
         }finally{
-            deleteContentTypes(CollectionsUtils
-                    .list(parentContentType, childContentType, grandChildContentType));
+
+            if (testCase.testSelfRelated){
+                deleteContentTypes(CollectionsUtils
+                        .list(parentContentType, childContentType));
+            } else{
+                deleteContentTypes(CollectionsUtils
+                        .list(parentContentType, childContentType, grandChildContentType));
+            }
 
             if (newRole != null){
                 roleAPI.delete(newRole);
@@ -532,6 +743,85 @@ public class ContentResourceTest extends IntegrationTestBase {
 
     }
 
+    @Test
+    @UseDataProvider("categoryTestCases")
+    public void testGetContentWithAllCategoriesInfo(final String testCase) throws Exception {
+
+        Contentlet contentlet = null;
+        ContentType contentType = null;
+        Category parentCategory = null;
+
+        try {
+
+            // Parent and child categories
+            final Category firstChildCategory = createCategory("My Topic", 1).next();
+            final Category secondChildCategory = createCategory("Other Topic", 1).next();
+            parentCategory = createCategory("Custom Topic", 0)
+                    .children(firstChildCategory, secondChildCategory).nextPersisted();
+
+            // Content Type with category field
+            final String CATEGORY_NAME = "customTopic";
+            final List<Field> fields = new ArrayList<>();
+            fields.add(new FieldDataGen().name("Title").velocityVarName("title").next());
+            fields.add(new FieldDataGen().type(CategoryField.class)
+                    .name(CATEGORY_NAME).velocityVarName(CATEGORY_NAME)
+                    .values(parentCategory.getInode()).next());
+            contentType = new ContentTypeDataGen().host(host).fields(fields).nextPersisted();
+
+            // Save content with categories
+            final long language = languageAPI.getDefaultLanguage().getId();
+            contentlet = new ContentletDataGen(contentType.id())
+                    .languageId(language)
+                    .setProperty("title", "Test Contentlet")
+                    .addCategory(firstChildCategory).addCategory(secondChildCategory)
+                    .nextPersisted();
+            assertTrue(APILocator.getContentletAPI().isInodeIndexed(
+                    contentlet.getInode(), false, 1000));
+
+            // Build request and response
+            final HttpServletRequest request = createHttpRequest(null, null);
+            final HttpServletResponse response = new MockHttpResponse(new BaseResponse().response());
+
+            // Send request
+            final ContentResource contentResource = new ContentResource();
+            final Response endpointResponse = contentResource.getContent(request, response,
+                    "/id/" + contentlet.getIdentifier()
+                    + "/languageId/" + language + "/live/false/type/"
+                    + (testCase.equals(JSON_RESPONSE) ? "json" : "xml")
+                    + "/" + RESTParams.ALL_CATEGORIES_INFO + "/true");
+
+            // Verify result
+            assertEquals(Status.OK.getStatusCode(), endpointResponse.getStatus());
+
+            if (testCase.equals(JSON_RESPONSE)) {
+                // Verify JSON result
+                final JSONObject json = new JSONObject(endpointResponse.getEntity().toString());
+                final JSONArray contentlets = json.getJSONArray("contentlets");
+                assertEquals(1, contentlets.length());
+
+                final JSONObject resultContentlet = (JSONObject) contentlets.get(0);
+                final JSONArray resultCategories = resultContentlet.getJSONArray(CATEGORY_NAME);
+                validateCategoryJSON(resultCategories, firstChildCategory, secondChildCategory);
+            } else {
+                // Verify xml result
+                validateCategoryXML(endpointResponse.getEntity().toString(), CATEGORY_NAME,
+                        firstChildCategory, secondChildCategory);
+            }
+
+        } finally {
+            if (UtilMethods.isSet(contentlet) && UtilMethods.isSet(contentlet.getInode())) {
+                ContentletDataGen.remove(contentlet);
+            }
+            if (UtilMethods.isSet(contentType) && UtilMethods.isSet(contentType.id())) {
+                ContentTypeDataGen.remove(contentType);
+            }
+            if (UtilMethods.isSet(parentCategory) && UtilMethods.isSet(parentCategory.getInode())){
+                APILocator.getCategoryAPI().delete( parentCategory, user, false );
+            }
+        }
+
+    }
+
     private Role createRole() throws DotDataException {
         final long millis =  System.currentTimeMillis();
 
@@ -554,7 +844,7 @@ public class ContentResourceTest extends IntegrationTestBase {
                 try {
                     contentTypeAPI.delete(contentType);
                 } catch (Exception e) {
-                    fail(e.getMessage());
+                    e.getMessage();
                 }
             }
         });
@@ -618,7 +908,7 @@ public class ContentResourceTest extends IntegrationTestBase {
 
         if (depth > 1) {
             //validates grandchildren
-            final JSONArray jsonArray = (JSONArray) ((JSONObject) contentlet
+            JSONArray jsonArray = (JSONArray) ((JSONObject) contentlet
                     .get(parent.getContentType().fields().get(0).variable()))
                     .get(child.getContentType().fields().get(0).variable());
 
@@ -638,11 +928,42 @@ public class ContentResourceTest extends IntegrationTestBase {
                             || grandChild
                             .equals(contentletMap.get("grandChild2").getIdentifier())));
 
+            //Validate self-related if needed
+            if (contentletMap.containsKey("sibling")){
+                jsonArray = (JSONArray) ((JSONObject) contentlet
+                        .get(parent.getContentType().fields().get(0).variable()))
+                        .get(child.getContentType().fields().get(2).variable());
+                assertEquals(1, jsonArray.length());
+
+                assertEquals(contentletMap.get("sibling").getIdentifier(), depth == 2 ? jsonArray.get(0)
+                        : JSONObject.class.cast(jsonArray.get(0)).get(IDENTIFIER));
+
+            }
+
             //parent relationship was not added back again
             assertFalse(((JSONObject) contentlet
                     .get(parent.getContentType().fields().get(0).variable()))
                     .has(child.getContentType().fields().get(1).variable()));
         }
+    }
+
+    private void validateCategoryJSON (
+            final JSONArray resultCategories, final Category ...categories)
+            throws JSONException {
+
+        assertNotNull(resultCategories);
+        assertEquals(categories.length, resultCategories.length());
+        for (int i = 0; i < resultCategories.length(); i++) {
+            final JSONObject resultCategory = resultCategories.getJSONObject(i);
+            final String resultCategoryKey = resultCategory.getString("key");
+            final Optional<Category> matchCategory = Arrays.stream(categories)
+                    .filter(category -> category.getKey().equals(resultCategoryKey))
+                    .findFirst();
+            assertTrue(matchCategory.isPresent());
+            final Category expectedCategory = matchCategory.get();
+            assertEquals(expectedCategory.getCategoryName(), resultCategory.get("categoryName"));
+        }
+
     }
 
     /**
@@ -699,12 +1020,29 @@ public class ContentResourceTest extends IntegrationTestBase {
             final DeferredElementImpl contentlet, final Contentlet parent,
             final Contentlet child, final int depth) {
 
-        assertEquals(child.getIdentifier(),
-                ((DeferredElementImpl) contentlet
-                        .getElementsByTagName(
-                                parent.getContentType().fields().get(0).variable())
-                        .item(0)).getElementsByTagName(IDENTIFIER).item(0)
-                        .getTextContent());
+        //Verifies self related case
+        if (depth == 3 && contentletMap.containsKey("sibling")){
+            assertEquals(contentletMap.get("sibling").getIdentifier(),
+                    ((DeferredElementImpl) contentlet
+                            .getElementsByTagName(
+                                    parent.getContentType().fields().get(0).variable())
+                            .item(0)).getElementsByTagName(IDENTIFIER).item(0)
+                            .getTextContent());
+
+            assertEquals(child.getIdentifier(),
+                    ((DeferredElementImpl) contentlet
+                            .getElementsByTagName(
+                                    parent.getContentType().fields().get(0).variable())
+                            .item(0)).getElementsByTagName(IDENTIFIER).item(1)
+                            .getTextContent());
+        } else{
+            assertEquals(child.getIdentifier(),
+                    ((DeferredElementImpl) contentlet
+                            .getElementsByTagName(
+                                    parent.getContentType().fields().get(0).variable())
+                            .item(0)).getElementsByTagName(IDENTIFIER).item(0)
+                            .getTextContent());
+        }
 
         if (depth > 1) {
             //validates grandchildren
@@ -731,6 +1069,35 @@ public class ContentResourceTest extends IntegrationTestBase {
         }
     }
 
+    private void validateCategoryXML(
+            final String resultXml, final String categoryElement, final Category... categories)
+            throws XPathExpressionException {
+
+        final InputSource xmlSource = new InputSource(new StringReader(
+                resultXml.replaceAll("\\n", "")));
+
+        final XPath xPath = XPathFactory.newInstance().newXPath();
+
+        final NodeList itemList = (NodeList) xPath.evaluate(
+                "//" + categoryElement + "/item",
+                xmlSource, XPathConstants.NODESET);
+
+        assertEquals(categories.length, itemList.getLength());
+        for (int i = 0; i < itemList.getLength(); i++) {
+            final Element resultCategory = (Element) itemList.item(i);
+            final String resultCategoryKey = (String) xPath.evaluate("key",
+                    resultCategory, XPathConstants.STRING);
+            final Optional<Category> matchCategory = Arrays.stream(categories)
+                    .filter(category -> category.getKey().equals(resultCategoryKey))
+                    .findFirst();
+            assertTrue(matchCategory.isPresent());
+            final Category expectedCategory = matchCategory.get();
+            assertEquals(expectedCategory.getCategoryName(), (String) xPath.evaluate(
+                    "categoryName", resultCategory, XPathConstants.STRING));
+        }
+
+
+    }
 
     @Test
     public void Test_Save_Action_Remove_Image_Then_Verify_Fields_Were_Cleared_Issue_15340() throws Exception {
@@ -842,7 +1209,7 @@ public class ContentResourceTest extends IntegrationTestBase {
             final HttpServletRequest request2 = createHttpRequest(jsonPayload2);
             final HttpServletResponse response2 = mock(HttpServletResponse.class);
             final Response endpointResponse2 = contentResource.singlePOST(request2, response2, "/save/1");
-            assertEquals(Status.INTERNAL_SERVER_ERROR.getStatusCode(), endpointResponse2.getStatus());
+            assertEquals(Status.BAD_REQUEST.getStatusCode(), endpointResponse2.getStatus());
 
             //The Endpoint can only handle the entire set of fields.. You can not use this endpoint to only update 1 field.
 
@@ -873,8 +1240,9 @@ public class ContentResourceTest extends IntegrationTestBase {
             final HttpServletRequest request1 = createHttpRequest(jsonPayload1);
             final HttpServletResponse response1 = mock(HttpServletResponse.class);
             final Response endpointResponse1 = contentResource.singlePOST(request1, response1, "/save/1");
-            assertEquals(Status.INTERNAL_SERVER_ERROR.getStatusCode(), endpointResponse1.getStatus());
-            assertEquals("Unable to set string value as a Long", endpointResponse1.getEntity());
+            assertEquals(Status.BAD_REQUEST.getStatusCode(), endpointResponse1.getStatus());
+            assertEquals(CollectionsUtils.map("message", "Unable to set string value as a Long"),
+                    endpointResponse1.getEntity());
 
         }finally {
             if(null != contentType){
@@ -902,8 +1270,57 @@ public class ContentResourceTest extends IntegrationTestBase {
             final HttpServletRequest request1 = createHttpRequest(jsonPayload1);
             final HttpServletResponse response1 = mock(HttpServletResponse.class);
             final Response endpointResponse1 = contentResource.singlePOST(request1, response1, "/save/1");
-            assertEquals(Status.INTERNAL_SERVER_ERROR.getStatusCode(), endpointResponse1.getStatus());
+            assertEquals(Status.BAD_REQUEST.getStatusCode(), endpointResponse1.getStatus());
             /// No Detailed Message is shown here. Explaining that the field is required
+        }finally {
+            if(null != contentType){
+                contentTypeAPI.delete(contentType);
+            }
+        }
+
+    }
+
+    @DataProvider
+    public static Object[] contentResourceInvalidParamsDP(){
+
+        // case 1 bad stInode value
+        final String case1Payload = "{\n"
+                + "    \"stInode\" : \"InvalidValue\",\n"
+                + "    \"numeric\" : \"0\",\n"
+                + "    \"image\" : \"whatever\"\n"
+                + "}";
+
+        // tuple: payload, expected response
+        final Tuple2 case1 = new Tuple2<>(case1Payload, Status.BAD_REQUEST);
+
+        // case 2 missing stInode param
+        final String case2Payload = "{\n"
+                + "    \"numeric\" : \"0\",\n"
+                + "    \"image\" : \"whatever\"\n"
+                + "}";
+
+        // tuple: payload, expected response
+        final Tuple2 case2 = new Tuple2<>(case2Payload, Status.BAD_REQUEST);
+
+        return new Tuple2[]{
+                case1,
+                case2
+        };
+    }
+
+    @Test
+    @UseDataProvider("contentResourceInvalidParamsDP")
+    public void testSinglePOST_InvalidParamsShouldReturn400(final Tuple2<String, Response.Status> testCase) throws Exception {
+        final ContentResource contentResource = new ContentResource();
+        ContentType contentType = null;
+        try {
+            contentType = createSampleContentType(true);
+
+            //Create an instance of the CT
+            final HttpServletRequest request1 = createHttpRequest(testCase._1);
+            final HttpServletResponse response1 = mock(HttpServletResponse.class);
+            final Response endpointResponse1 = contentResource.singlePOST(request1, response1, "/save/1");
+            assertEquals(Status.BAD_REQUEST.getStatusCode(), endpointResponse1.getStatus());
         }finally {
             if(null != contentType){
                 contentTypeAPI.delete(contentType);
@@ -935,6 +1352,7 @@ public class ContentResourceTest extends IntegrationTestBase {
         }
 
         when(request.getContentType()).thenReturn(MediaType.APPLICATION_JSON);
+        request.setAttribute(WebKeys.USER,user);
 
         return request;
 
@@ -976,6 +1394,15 @@ public class ContentResourceTest extends IntegrationTestBase {
         return newUser;
     }
 
+    private CategoryDataGen createCategory(final String categoryName, final int sortOrder) {
+        final SimpleDateFormat simpleDateFormat = new SimpleDateFormat("yyyyMMdd-HHmmss");
+        final String categoryKey = categoryName.toLowerCase().replaceAll("\\s", "")
+                + "-" + simpleDateFormat.format(new Date());
+        return new CategoryDataGen().setCategoryName(categoryName)
+                .setKey(categoryKey).setCategoryVelocityVarName(categoryKey)
+                .setSortOrder(sortOrder);
+    }
+
     static class MockServletInputStream extends ServletInputStream {
 
         private final InputStream sourceStream;
@@ -1013,4 +1440,126 @@ public class ContentResourceTest extends IntegrationTestBase {
         }
     }
 
+    /**
+     * Method to test: {@link ContentResource#getContent(HttpServletRequest, HttpServletResponse, String)}
+     * Given scenario: Create a Category with 3 levels of depth:
+     *          Parent Category
+     *                  Child Category
+     *                          Grand Child Category
+     *
+     *                  Create a Content Type with a Category field, and a contentlet of it. To
+     *                  the contentlet add the Grand Child Category.
+     * Expected result: json response must include the grand child category info
+     */
+    @Test
+    public void test_getContent_includeGrandChildCategory_success()
+            throws Exception {
+
+        final long currentTime = System.currentTimeMillis();
+        //Create Parent Category.
+        final Category parentCategory = new CategoryDataGen()
+                .setCategoryName("CT-Category-Parent"+currentTime)
+                .setKey("parent"+currentTime)
+                .setCategoryVelocityVarName("parent"+currentTime)
+                .nextPersisted();
+
+        //Create First Child Category.
+        final Category childCategoryA = new CategoryDataGen()
+                .setCategoryName("CT-Category-A"+currentTime)
+                .setKey("categoryA"+currentTime)
+                .setCategoryVelocityVarName("categoryA"+currentTime)
+                .next();
+
+        //Second Level Category.
+        final Category childCategoryA_1 = new CategoryDataGen()
+                .setCategoryName("CT-Category-A-1"+currentTime)
+                .setKey("categoryA-1"+currentTime)
+                .setCategoryVelocityVarName("categoryA-1"+currentTime)
+                .next();
+
+        APILocator.getCategoryAPI().save(parentCategory, childCategoryA, user, false);
+        APILocator.getCategoryAPI().save(childCategoryA, childCategoryA_1, user, false);
+
+        // Content Type with category field
+        final List<Field> fields = new ArrayList<>();
+        fields.add(new FieldDataGen().name("Title").velocityVarName("title").next());
+        fields.add(new FieldDataGen().type(CategoryField.class)
+                .name(parentCategory.getCategoryName()).velocityVarName(parentCategory.getCategoryVelocityVarName())
+                .values(parentCategory.getInode()).next());
+        final ContentType contentType = new ContentTypeDataGen().host(host).fields(fields).nextPersisted();
+
+        // Save content with grand child category
+        final Contentlet contentlet = new ContentletDataGen(contentType.id())
+                .setProperty("title", "Test Contentlet"+currentTime)
+                .addCategory(childCategoryA_1)
+                .nextPersisted();
+
+
+        //Call resource
+        final Response responseResource = new ContentResource().getContent(createHttpRequest(),new MockHttpResponse(),"/id/"+contentlet.getIdentifier() + "/live/false/type/json");
+
+        // Verify result
+        assertEquals(Status.OK.getStatusCode(), responseResource.getStatus());
+
+        // Verify JSON result
+        final JSONObject json = new JSONObject(responseResource.getEntity().toString());
+        final JSONArray contentlets = json.getJSONArray("contentlets");
+        assertEquals(1, contentlets.length());
+        assertTrue(contentlets.toString().contains(childCategoryA_1.getCategoryName()));
+    }
+
+    /**
+     * Method to test: {@link ContentResource#getContent(HttpServletRequest, HttpServletResponse, String)}
+     * Given scenario: Create a ContentType with a text field and a SelfJoined Relationship.
+     *                  Create 3 contentlets and relate as below:
+     *          Parent Contentlet
+     *                  Child Contentlet
+     *                          Grand Child Contentlet
+     *
+     * Expected result: json response must include the grand child contentlet info, since depth = 3
+     */
+    @Test
+    public void test_getContent_SelfRelatedWith3LevelsOfDepth_shouldReturnRelationships() throws Exception{
+        final ContentType contentType = createSampleContentType(false);
+
+        final Field textField = FieldBuilder.builder(TextField.class).name("title")
+                .contentTypeId(contentType.id()).build();
+        fieldAPI.save(textField, user);
+
+        final Field relationshipField = createRelationshipField("selfRelationship",
+                contentType,contentType.variable(),RELATIONSHIP_CARDINALITY.MANY_TO_MANY.ordinal());
+        final Relationship relationship = relationshipAPI.getRelationshipFromField(relationshipField,user);
+
+        //creates contentlets
+        final ContentletDataGen contentletDataGen = new ContentletDataGen(contentType.id());
+        final Contentlet grandChild = contentletDataGen.languageId(1).setProperty(textField.name(),"grandChild").nextPersisted();
+        Contentlet child = contentletDataGen.languageId(1).setProperty(textField.name(),"child").next();
+        child = contentletAPI.checkin(child,CollectionsUtils.map(relationship,CollectionsUtils.list(grandChild)),user,false);
+        Contentlet parent = contentletDataGen.languageId(1).setProperty(textField.name(),"parent").next();
+        parent = contentletAPI.checkin(parent,CollectionsUtils.map(relationship,CollectionsUtils.list(child)),user,false);
+
+        final ContentResource contentResource = new ContentResource();
+        final HttpServletRequest request = createHttpRequest(null, null);
+        final HttpServletResponse response = mock(HttpServletResponse.class);
+        final Response endpointResponse = contentResource.getContent(request, response,
+                "/id/" + parent.getIdentifier() + "/live/false/depth/3");
+
+        assertEquals(200,endpointResponse.getStatus());
+        final JSONObject json = new JSONObject(endpointResponse.getEntity().toString());
+        final JSONArray contentlets = json.getJSONArray("contentlets");
+
+        final JSONObject parentJSONContentlet = (JSONObject) contentlets.get(0);
+        assertEquals(parent.getIdentifier(), parentJSONContentlet.get(IDENTIFIER));
+        assertEquals("parent", parentJSONContentlet.get("title"));
+
+        final JSONArray jsonArrayParentRelationships = (JSONArray) parentJSONContentlet.get(relationshipField.variable());
+        final JSONObject childJSONContentlet = (JSONObject) jsonArrayParentRelationships.get(0);
+        assertEquals(child.getIdentifier(), childJSONContentlet.get(IDENTIFIER));
+        assertEquals("child", childJSONContentlet.get("title"));
+
+        final JSONArray jsonArrayChildRelationships = (JSONArray) childJSONContentlet.get(relationshipField.variable());
+        final JSONObject grandChildJSONContentlet = (JSONObject) jsonArrayChildRelationships.get(0);
+        assertEquals(grandChild.getIdentifier(), grandChildJSONContentlet.get(IDENTIFIER));
+        assertEquals("grandChild", grandChildJSONContentlet.get("title"));
+    }
 }

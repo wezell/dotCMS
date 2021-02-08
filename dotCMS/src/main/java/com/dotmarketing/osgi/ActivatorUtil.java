@@ -1,6 +1,9 @@
 package com.dotmarketing.osgi;
 
 import com.dotcms.repackage.org.apache.commons.io.FilenameUtils;
+import com.dotcms.repackage.org.apache.struts.Globals;
+import com.dotcms.repackage.org.apache.struts.config.ModuleConfig;
+import com.dotcms.repackage.org.apache.struts.config.impl.ModuleConfigImpl;
 import com.dotmarketing.util.Config;
 import com.dotmarketing.util.VelocityUtil;
 import com.liferay.portal.util.Constants;
@@ -15,9 +18,6 @@ import java.nio.file.Files;
 import java.util.Enumeration;
 import javax.servlet.ServletContext;
 import org.apache.felix.http.api.ExtHttpService;
-import org.apache.struts.Globals;
-import org.apache.struts.config.ModuleConfig;
-import org.apache.struts.config.impl.ModuleConfigImpl;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.ServiceReference;
 
@@ -125,7 +125,7 @@ class ActivatorUtil {
 
         //Find all the resources under that folder
         Enumeration<URL> entries = context.getBundle().findEntries( containerFolder, "*.*", true );
-        while ( entries.hasMoreElements() ) {
+        while ( entries != null && entries.hasMoreElements() ) {
 
             URL entryUrl = entries.nextElement();
             String entryPath = entryUrl.getPath();

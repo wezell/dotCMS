@@ -1,14 +1,5 @@
 package com.dotcms.rendering.velocity.viewtools.navigation;
 
-import com.dotmarketing.business.APILocator;
-import com.dotmarketing.business.PermissionAPI;
-import com.dotmarketing.business.web.WebAPILocator;
-import com.dotmarketing.exception.DotDataException;
-import com.dotmarketing.exception.DotSecurityException;
-import com.dotmarketing.util.Config;
-import com.dotmarketing.util.Logger;
-import com.dotmarketing.util.UtilMethods;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -17,6 +8,15 @@ import javax.servlet.http.HttpServletRequest;
 
 import org.apache.velocity.tools.view.context.ViewContext;
 
+import com.dotmarketing.business.APILocator;
+import com.dotmarketing.business.PermissionAPI;
+import com.dotmarketing.business.web.WebAPILocator;
+import com.dotmarketing.exception.DotDataException;
+import com.dotmarketing.exception.DotSecurityException;
+import com.dotmarketing.util.Config;
+import com.dotmarketing.util.Logger;
+import com.dotmarketing.util.UtilMethods;
+import com.dotmarketing.util.json.JSONIgnore;
 import com.liferay.portal.model.User;
 
 public final class NavResultHydrated extends NavResult{
@@ -29,13 +29,16 @@ public final class NavResultHydrated extends NavResult{
     final transient ViewContext context;
 
     public NavResultHydrated(final NavResult navResult, final ViewContext context) {
-        super(navResult);
-        this.navResult = navResult;
+        super(navResult.getUnhydratedNavResult());
+        this.navResult = navResult.getUnhydratedNavResult();
         this.context = context;
-
     }
-
-
+    @Override
+    @JSONIgnore
+    public NavResult getUnhydratedNavResult() {
+      return this.navResult;
+    }
+    
 
     public boolean isActive() {
         if (context != null && UtilMethods.isSet(navResult.getHref())) {
@@ -43,7 +46,7 @@ public final class NavResultHydrated extends NavResult{
             if (req != null) {
                 // We exclude the page name from the Request URI so we can check if page's parent
                 // object is the real active object
-                String reqURI = req.getRequestURI();
+                String reqURI = req.getRequestURI().replace("/api/v1/page/render", "");
                 String parentPath = reqURI.substring(0, reqURI.lastIndexOf("/"));
                 if (!parentPath.endsWith("/"))
                     // Adding a slash at the end of the path, so it avoids false positives
@@ -86,7 +89,7 @@ public final class NavResultHydrated extends NavResult{
         return navResult.getHostId();
     }
 
-
+    @Override
     public String getHref() {
         return navResult.getHref();
     }
@@ -115,68 +118,84 @@ public final class NavResultHydrated extends NavResult{
     @Override
     public List<? extends NavResult> getChildren() throws Exception {
 
+        final List<NavResultHydrated> navList = this.navResult.getChildren().stream()
+                .map(result -> new NavResultHydrated(result, this.context)).collect(Collectors.toList());
 
-        List<NavResultHydrated> list = navResult.getChildren().stream().map(result -> new NavResultHydrated(result, this.context)).collect(Collectors.toList());
-        
-        
-        
         if (Config.getBooleanProperty("ENABLE_NAV_PERMISSION_CHECK", false)) {
             // now filtering permissions
-            List<NavResult> allow = new ArrayList<NavResult>(list.size());
+            final HttpServletRequest request        = this.context.getRequest();
+            User currentUser                        = WebAPILocator.getUserWebAPI().getLoggedInUser(request);
 
-            HttpServletRequest req = (HttpServletRequest) context.getRequest();
-            User currentUser = WebAPILocator.getUserWebAPI()
-                .getLoggedInUser(req);
-            if (currentUser == null)
-                currentUser = APILocator.getUserAPI()
-                    .getAnonymousUser();
-            for (NavResult nv : list) {
+            if (currentUser == null) {
+
+                currentUser = APILocator.getUserAPI().getAnonymousUser();
+            } else {
+
+                if (currentUser.isAdmin()) {
+
+                    return navList;
+                }
+            }
+
+            final List<NavResult>    navAllowedList = new ArrayList<>(navList.size());
+
+            for (final NavResult navResult : navList) {
+
                 try {
                     if (APILocator.getPermissionAPI()
-                        .doesUserHavePermission(nv, PermissionAPI.PERMISSION_READ, currentUser)) {
-                        allow.add(nv);
+                        .doesUserHavePermission(navResult, PermissionAPI.PERMISSION_READ, currentUser)) {
+
+                        navAllowedList.add(navResult);
                     }
                 } catch (Exception ex) {
                     Logger.error(this, ex.getMessage(), ex);
                 }
             }
-            return allow;
+
+            return navAllowedList;
         }
-        return list;
+
+        return navList;
     }
 
-
+    @Override
     public String getParentPath() throws DotDataException, DotSecurityException {
         return navResult.getParentPath();
     }
 
 
-
+    @Override
     public NavResult getParent() throws DotDataException, DotSecurityException {
         return navResult.getParent();
     }
 
 
-
+    @Override
     public List<String> getChildrenFolderIds() {
         return navResult.getChildrenFolderIds();
     }
 
-
+    @Override
     public String getType() {
         return navResult.getType();
     }
 
 
-
+    @Override
     public String getTarget() {
         return navResult.getTarget();
     }
 
-
+    @Override
     public String getOwner() {
         return navResult.getOwner();
     }
+
+    @Override
+    public String getPermissionId() {
+        return navResult.getPermissionId();
+    }
+
 
 
 
